@@ -139,6 +139,18 @@
   transform: translateX(4%);
 }
 
+.logo-text {
+  font-family: 'Special Elite', monospace;
+  font-size: 5rem;
+  color: white;
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.3));
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.logo-online-container:hover .logo-text {
+  filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.4)) brightness(0.8);
+}
+
 @media (max-width: 768px) {
   .logo {
     max-width: 300px;
@@ -152,6 +164,10 @@
 
   .button-container {
     transform: translateX(-0.75rem);
+  }
+
+  .logo-text {
+    font-size: 4rem;
   }
 }
 
@@ -167,5 +183,9 @@
 
   .button-container {
     transform: translateX(-0.5rem);
+  }
+
+  .logo-text {
+    font-size: 3rem;
   }
 } 

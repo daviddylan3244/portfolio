@@ -37,9 +37,9 @@ const Clothing = () => {
     const gap = 20;
     
     const pieces = [
-        { src: '/clothing/clothing1.jpg', title: 'THE SKY IS FALLING', year: '2022' },
-        { src: '/clothing/clothing2.jpg', title: 'YA NO LLORES', year: '2022' },
-        { src: '/clothing/clothing3.PNG', title: 'Nightmare Hoodie', year: '2021' },
+        { src: '/photos/hockey-1.JPG', title: 'Northeastern Hockey', year: '2023' },
+        { src: '/photos/ICA.jpg', title: 'ICA Boston', year: '2023' },
+        { src: '/photos/RedBullHeavyMetal.jpg', title: 'Red Bull Heavy Metal', year: '2023' },
         { src: '/clothing/clothing4.JPG', title: 'Unstoppable Chaos (Brown)', year: '2022' },
         { src: '/clothing/clothing5.JPG', title: 'Unstoppable Chaos (Black)', year: '2022' }
     ];

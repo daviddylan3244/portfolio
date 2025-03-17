@@ -66,7 +66,7 @@ function LandingPage() {
           onTouchStart={handleTouch}
         >
           <div className={`image-container ${isHovered ? 'hovered' : ''}`}>
-            <img src="/am.png" alt="AM Logo" className="logo" />
+            <span className="logo-text">Davey</span>
           </div>
           <div className={`online-text ${isHovered ? 'hovered' : ''}`}>
             <span className="nav-button">

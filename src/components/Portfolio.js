@@ -19,14 +19,14 @@ const Portfolio = () => {
                         className="menu-item"
                         onClick={() => navigate('/clothing')}
                     >
-                        Clothing
+                        Photography
                     </button>
                 </div>
                 <button 
                     className="menu-item"
                     onClick={() => navigate('/graffiti')}
                 >
-                    Graffiti
+                    Design Work
                 </button>
             </div>
         </div>
