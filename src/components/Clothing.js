@@ -37,11 +37,11 @@ const Clothing = () => {
     const gap = 20;
     
     const pieces = [
-        { src: '/photos/hockey-1.JPG', title: 'Northeastern Hockey', year: '2023' },
-        { src: '/photos/ICA.jpg', title: 'ICA Boston', year: '2023' },
-        { src: '/photos/RedBullHeavyMetal.jpg', title: 'Red Bull Heavy Metal', year: '2023' },
-        { src: '/clothing/clothing4.JPG', title: 'Unstoppable Chaos (Brown)', year: '2022' },
-        { src: '/clothing/clothing5.JPG', title: 'Unstoppable Chaos (Black)', year: '2022' }
+        { src: '/photos/hockey-1.JPG', title: 'Northeastern Hockey', year: '2024' },
+        { src: '/photos/ICA.jpg', title: 'ICA Boston', year: '2024' },
+        { src: '/photos/redbullEvent-copy.jpg', title: 'Red Bull Heavy Metal', year: '2025' },
+        { src: '/photos/blackfires.jpg', title: 'Blackfires Concert', year: '2025' },
+        { src: '/photos/boston.jpg', title: 'Boston Skyline', year: '2024' }
     ];
 
     const [enlargedId, setEnlargedId] = useState(null);
@@ -130,12 +130,12 @@ const Clothing = () => {
                         Portfolio
                     </button>
                 </div>
-                <img 
-                    src="/am.png" 
-                    alt="AM Logo" 
+                <span 
                     className="header-logo"
                     onClick={() => navigate('/')}
-                />
+                >
+                    Return Home
+                </span>
             </div>
             <div className="carousel-container">
                 <div className="carousel-section">

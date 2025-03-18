@@ -140,11 +140,12 @@
 }
 
 .logo-text {
-  font-family: 'Special Elite', monospace;
-  font-size: 5rem;
   color: white;
-  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.3));
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 3rem;
+  font-family: 'Special Elite', monospace;
+  white-space: nowrap;
+  display: inline-block;
+  margin: 2rem 0;
 }
 
 .logo-online-container:hover .logo-text {

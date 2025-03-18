@@ -58,12 +58,12 @@ const GraffitiGallery = () => {
     
     // Updated image URLs with correct file extensions
     const imageUrls = [
-        '/graffiti/1.JPG',
-        '/graffiti/2.jpg',
-        '/graffiti/3.jpg',
-        '/graffiti/4.jpg',
-        '/graffiti/5.jpg',
-        '/graffiti/6.jpg',
+        '/graffiti/coinsorter.png',  // New image
+        '/graffiti/Coinsorter2.png',
+        '/graffiti/jackethook.png',
+        '/graffiti/jackethook2.png',
+        '/graffiti/WindowShelf.png',
+        '/graffiti/WindowShelf2.png',
         '/graffiti/7.jpg'
     ];
     
@@ -183,12 +183,12 @@ const GraffitiGallery = () => {
                         Store
                     </button>
                 </div>
-                <img 
-                    src="/am.png" 
-                    alt="AM Logo" 
+                <span 
                     className="header-logo"
                     onClick={() => navigate('/')}
-                />
+                >
+                    Return Home
+                </span>
             </div>
             <div style={{ 
                 position: 'relative', 

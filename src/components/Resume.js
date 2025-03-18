@@ -23,12 +23,12 @@ function Resume() {
             Store
           </button>
         </div>
-        <img 
-          src="/am.png" 
-          alt="AM Logo" 
+        <span 
           className="header-logo"
           onClick={() => navigate('/')}
-        />
+        >
+          RETURN HOME
+        </span>
       </div>
       <div className="resume-container">
         <div className="contact-section">
@@ -42,6 +42,21 @@ function Resume() {
         <div className="resume-section">
           <h2>Experience</h2>
           
+          <div className="experience-item">
+            <div className="exp-header">
+              <h3>Growth Rocket LLC</h3>
+              <span>Boston,MA</span>
+            </div>
+            <div className="exp-subheader">
+              <p>Chief Marketing Officer</p>
+              <span>January 2025 – Present</span>
+            </div>
+            <ul>
+              <li>• Developed and implemented a new marketing strategy to revitalize a stagnating company, collaborating with team members to drive growth</li>
+              <li>• Currently spearheading the creation of a news spotlight campaign to increase company exposure and attract new clients</li>
+            </ul>
+          </div>
+
           <div className="experience-item">
             <div className="exp-header">
               <h3>The Huntington News</h3>
@@ -129,7 +144,7 @@ function Resume() {
               <p>Summer Study Abroad</p>
               <span>July 2022 - August 2023</span>
             </div>
-            <p className="courses">Courses: Calculus for Business; Microeconomics; Sustainable Entrepreneurship; International Business</p>
+            <p className="courses">Courses: EU & its Discontents and Advanced Photography</p>
           </div>
 
           <div className="education-item">

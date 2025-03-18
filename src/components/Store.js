@@ -19,12 +19,12 @@ function Store() {
           </button>
           <button className="header-button">Store</button>
         </div>
-        <img 
-          src="/am.png" 
-          alt="AM Logo" 
+        <span 
           className="header-logo"
           onClick={() => navigate('/')}
-        />
+        >
+          RETURN HOME
+        </span>
       </div>
       <div style={{ 
         display: 'flex', 
