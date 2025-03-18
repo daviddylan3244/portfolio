@@ -28,9 +28,12 @@ function LandingPage() {
     };
 
     const animateText = async () => {
-      await typeText('Online', setOnlineText, 500);
-      await typeText('Portfolio', setPortfolioText, 500);
-      await typeText('Store', setStoreText, 500);
+      // Added a 500ms delay to all animations
+      Promise.all([
+        typeText('David Dylan\'s Design', setOnlineText, 500),
+        typeText('Portfolio', setPortfolioText, 500),
+        typeText('Store', setStoreText, 500)
+      ]);
     };
 
     animateText();

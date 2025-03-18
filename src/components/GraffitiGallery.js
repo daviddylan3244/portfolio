@@ -67,7 +67,7 @@ const GraffitiGallery = () => {
     ];
     
     const [images, setImages] = useState(
-        Array.from({length: 7}, (_, i) => ({
+        Array.from({length: 6}, (_, i) => ({
             id: i,
             src: imageUrls[i],
             width: imageWidth,
