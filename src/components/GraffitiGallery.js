@@ -64,7 +64,6 @@ const GraffitiGallery = () => {
         '/graffiti/jackethook2.png',
         '/graffiti/WindowShelf.png',
         '/graffiti/WindowShelf2.png',
-        '/graffiti/7.jpg'
     ];
     
     const [images, setImages] = useState(
