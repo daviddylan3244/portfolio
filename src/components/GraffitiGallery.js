@@ -58,7 +58,7 @@ const GraffitiGallery = () => {
     
     // Updated image URLs with correct file extensions
     const imageUrls = [
-        '/graffiti/coinsorter.png',  // New image
+        '/graffiti/Coinsorter.png',  // New image
         '/graffiti/Coinsorter2.png',
         '/graffiti/jackethook.png',
         '/graffiti/jackethook2.png',
