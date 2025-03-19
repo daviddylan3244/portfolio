@@ -68,11 +68,7 @@ const GraffitiGallery = () => {
     ];
     
     const [images, setImages] = useState(
-<<<<<<< HEAD
-        Array.from({length: 6}, (_, i) => ({
-=======
         Array.from({length: 11}, (_, i) => ({
->>>>>>> master
             id: i,
             src: imageUrls[i],
             width: i === 6 ? 1108 : i === 7 ? 1363 : imageWidth,

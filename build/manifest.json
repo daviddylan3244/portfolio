@@ -1,13 +1,7 @@
 {
-  "short_name": "Amleth Online",
-  "name": "Amleth Online Portfolio and Store",
-  "icons": [
-    {
-      "src": "am.png",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/png"
-    }
-  ],
+  "short_name": "Portfolio",
+  "name": "Portfolio Gallery",
+  "icons": [],
   "start_url": ".",
   "display": "standalone",
   "theme_color": "#000000",
