@@ -44,8 +44,17 @@ const Clothing = () => {
         { src: '/photos/boston.jpg', title: 'Boston Skyline', year: '2024' }
     ];
 
+    const pieces2 = [
+        { src: '/photos/MFA.jpg', title: 'Museum of Fine Arts', year: '2025' },
+        { src: '/photos/Nydia.jpg', title: 'Nydia Caro Concert', year: '2025' },
+        { src: '/photos/Hockey-2.jpg', title: 'Northeastern Hockey', year: '2024' },
+        { src: '/photos/Chinese New Year-47.jpg', title: 'Chinese New Year Event', year: '2025' },
+        { src: '/photos/IsabellaStewartGardnerMuseum.jpg', title: 'Isabella Stewart Gardner Museum', year: '2025' }
+    ];
+
     const [enlargedId, setEnlargedId] = useState(null);
     const [currentIndex, setCurrentIndex] = useState(2);
+    const [currentIndex2, setCurrentIndex2] = useState(2);
 
     const getInitialPosition = (index) => {
         const staggerX = 250;
@@ -67,27 +76,20 @@ const Clothing = () => {
             width: i === 2 ? currentImageWidth : imageWidth,
             height: i === 2 ? currentImageWidth : imageWidth,
             ...getInitialPosition(i),
-            zIndex: i === 2 ? 8 : 7 - Math.abs(i - 2)
+            zIndex: i  // This makes each image overlap the one to its left
         }))
     );
 
-    const bringToFront = (id) => {
-        if (!enlargedId) {
-            setImages(prevImages => prevImages.map(img => ({
-                ...img,
-                zIndex: img.id === id ? 1000 : img.zIndex
-            })));
-        }
-    };
-
-    const handleImageClick = (id) => {
-        if (enlargedId === id) {
-            setEnlargedId(null);
-        } else {
-            setEnlargedId(id);
-            bringToFront(id);
-        }
-    };
+    const [images2, setImages2] = useState(
+        pieces2.map((piece, i) => ({
+            id: i,
+            ...piece,
+            width: i === 2 ? currentImageWidth : imageWidth,
+            height: i === 2 ? currentImageWidth : imageWidth,
+            ...getInitialPosition(i),
+            zIndex: i
+        }))
+    );
 
     const handleArrowClick = (direction) => {
         setCurrentIndex(prev => {
@@ -104,7 +106,7 @@ const Clothing = () => {
                     ...getInitialPosition(newPosition),
                     width: isCenterImage ? currentImageWidth : imageWidth,
                     height: isCenterImage ? currentImageWidth : imageWidth,
-                    zIndex: isCenterImage ? 8 : 7 - Math.abs(newPosition - 2)
+                    zIndex: newPosition  // Maintain left-to-right overlap during rotation
                 };
             }));
             
@@ -112,6 +114,107 @@ const Clothing = () => {
         });
         setEnlargedId(null);
     };
+
+    const handleArrowClick2 = (direction) => {
+        setCurrentIndex2(prev => {
+            const newIndex = direction === 'next' 
+                ? (prev + 1) % images2.length 
+                : (prev - 1 + images2.length) % images2.length;
+            
+            setImages2(prevImages => prevImages.map((img, i) => {
+                const newPosition = (i - newIndex + 2 + images2.length) % images2.length;
+                const isCenterImage = newPosition === 2;
+                
+                return {
+                    ...img,
+                    ...getInitialPosition(newPosition),
+                    width: isCenterImage ? currentImageWidth : imageWidth,
+                    height: isCenterImage ? currentImageWidth : imageWidth,
+                    zIndex: newPosition
+                };
+            }));
+            
+            return newIndex;
+        });
+        setEnlargedId(null);
+    };
+
+    const handleImageClick = (id) => {
+        if (enlargedId === id) {
+            setEnlargedId(null);
+        } else {
+            setEnlargedId(id);
+        }
+    };
+
+    const bringToFront = (id) => {
+        if (!enlargedId) {
+            setImages(prevImages => prevImages.map(img => ({
+                ...img,
+                zIndex: img.id === id ? 20 : img.zIndex
+            })));
+        }
+    };
+
+    // Add this CSS to handle the enlarged state
+    const enlargedStyle = {
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '80vw',  // 80% of viewport width
+        height: '80vh',  // 80% of viewport height
+        zIndex: 1000,
+        backgroundColor: 'black',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        cursor: 'pointer'
+    };
+
+    const styles = `
+    .enlarged-text {
+        position: absolute;
+        bottom: -100px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        color: white;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        font-family: inherit;
+    }
+
+    .enlarged-text .nav-button {
+        font-size: 1.2rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+    }
+
+    .enlarged-view {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 1000;
+        width: 80%;
+        height: 80%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .enlarged-image {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+    }
+
+    .carousel-container {
+        position: relative;
+    }
+    `;
 
     return (
         <div className="clothing-container">
@@ -156,16 +259,17 @@ const Clothing = () => {
                             key={image.id}
                             className={`draggable-image-container ${enlargedId === image.id ? 'enlarged' : ''}`}
                             style={{
-                                position: enlargedId === image.id ? 'fixed' : 'absolute',
-                                width: `${enlargedId === image.id ? enlargedWidth : image.width}px`,
-                                height: `${enlargedId === image.id ? enlargedWidth : image.height}px`,
-                                ...(enlargedId !== image.id && {
+                                ...(enlargedId === image.id ? enlargedStyle : {
+                                    position: 'absolute',
+                                    width: `${image.width}px`,
+                                    height: `${image.height}px`,
                                     left: `${image.x}px`,
                                     top: `${image.y}px`,
-                                    transform: `rotate(${image.id * 2 - 7}deg)`
-                                })
+                                    transform: `rotate(${image.id * 2 - 7}deg)`,
+                                    zIndex: image.zIndex
+                                }),
+                                transition: 'all 0.3s ease-in-out'
                             }}
-                            onMouseEnter={() => bringToFront(image.id)}
                             onClick={() => handleImageClick(image.id)}
                         >
                             <div className="image-wrapper">
@@ -173,20 +277,136 @@ const Clothing = () => {
                                     src={image.src}
                                     alt={`Clothing piece ${image.id + 1}`}
                                     className="gallery-image"
+                                    style={{
+                                        width: '100%',
+                                        height: '100%',
+                                        objectFit: enlargedId === image.id ? 'contain' : 'cover'
+                                    }}
                                     loading="lazy"
                                 />
+                                {enlargedId === image.id && (
+                                    <div style={{
+                                        position: 'absolute',
+                                        bottom: '-60px',
+                                        left: '0',
+                                        width: '100%',
+                                        textAlign: 'center',
+                                        color: 'white',
+                                        padding: '20px'
+                                    }}>
+                                        <div style={{ fontSize: '24px', marginBottom: '8px' }}>
+                                            {image.title}
+                                        </div>
+                                        <div style={{ fontSize: '18px' }}>
+                                            {image.year}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))}
                 </div>
-                <div className="content-wrapper piece-info">
-                    <div className="piece-title">
-                        <span className="nav-button">{images[currentIndex].title}</span>
+                {/* Only show this text when no image is enlarged */}
+                {enlargedId === null && (
+                    <div className="content-wrapper piece-info">
+                        <div className="piece-title">
+                            <span className="nav-button">{images[currentIndex].title}</span>
+                        </div>
+                        <div className="piece-year">
+                            <span className="nav-button">{images[currentIndex].year}</span>
+                        </div>
                     </div>
-                    <div className="piece-year">
-                        <span className="nav-button">{images[currentIndex].year}</span>
+                )}
+            </div>
+            {/* Add overlay when image is enlarged */}
+            {enlargedId !== null && (
+                <div className="enlarged-view" onClick={() => setEnlargedId(null)}>
+                    <div className="enlarged-image-container" onClick={(e) => e.stopPropagation()}>
+                        <img 
+                            src={images[enlargedId].src} 
+                            alt={images[enlargedId].title}
+                            className="enlarged-image"
+                        />
+                        <div className="enlarged-text">
+                            <span className="nav-button">{images[enlargedId].title}</span>
+                            <span className="nav-button">{images[enlargedId].year}</span>
+                        </div>
                     </div>
                 </div>
+            )}
+
+            {/* Second Carousel */}
+            <div className="carousel-container" style={{ marginTop: '-300px' }}>
+                <div className="carousel-section">
+                    <div className="carousel-arrow left" onClick={() => handleArrowClick2('prev')}>
+                        <ArrowLeft />
+                    </div>
+                    <div className="carousel-arrow right" onClick={() => handleArrowClick2('next')}>
+                        <ArrowRight />
+                    </div>
+                    {images2.map((image) => (
+                        <div 
+                            key={image.id}
+                            className={`draggable-image-container ${enlargedId === image.id ? 'enlarged' : ''}`}
+                            style={{
+                                ...(enlargedId === image.id ? enlargedStyle : {
+                                    position: 'absolute',
+                                    width: `${image.width}px`,
+                                    height: `${image.height}px`,
+                                    left: `${image.x}px`,
+                                    top: `${image.y}px`,
+                                    transform: `rotate(${image.id * 2 - 7}deg)`,
+                                    zIndex: image.zIndex
+                                }),
+                                transition: 'all 0.3s ease-in-out'
+                            }}
+                            onClick={() => handleImageClick(image.id)}
+                        >
+                            <div className="image-wrapper">
+                                <img 
+                                    src={image.src}
+                                    alt={`Clothing piece ${image.id + 1}`}
+                                    className="gallery-image"
+                                    style={{
+                                        width: '100%',
+                                        height: '100%',
+                                        objectFit: enlargedId === image.id ? 'contain' : 'cover'
+                                    }}
+                                    loading="lazy"
+                                />
+                                {enlargedId === image.id && (
+                                    <div style={{
+                                        position: 'absolute',
+                                        bottom: '-60px',
+                                        left: '0',
+                                        width: '100%',
+                                        textAlign: 'center',
+                                        color: 'white',
+                                        padding: '20px'
+                                    }}>
+                                        <div style={{ fontSize: '24px', marginBottom: '8px' }}>
+                                            {image.title}
+                                        </div>
+                                        <div style={{ fontSize: '18px' }}>
+                                            {image.year}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                {/* Only show this text when no image is enlarged */}
+                {enlargedId === null && (
+                    <div className="content-wrapper piece-info">
+                        <div className="piece-title">
+                            <span className="nav-button">{images2[currentIndex2].title}</span>
+                        </div>
+                        <div className="piece-year">
+                            <span className="nav-button">{images2[currentIndex2].year}</span>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
