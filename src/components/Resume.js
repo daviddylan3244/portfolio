@@ -47,7 +47,7 @@ function Resume() {
           marginTop: '20px'
         }}>
           <img 
-            src="/photos/David-HS.jpg"
+            src="/photos/David-HS.JPG"
             alt="David Dylan Martinez-Dimnet"
             style={{
               width: '300px',
