@@ -39,6 +39,43 @@ function Resume() {
           </div>
         </div>
 
+        <div className="profile-section" style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '40px',
+          marginBottom: '40px',
+          marginTop: '20px'
+        }}>
+          <img 
+            src="/photos/David-HS.jpg"
+            alt="David Dylan Martinez-Dimnet"
+            style={{
+              width: '300px',
+              height: '400px',
+              objectFit: 'cover',
+              objectPosition: '45% center',
+              borderRadius: '4px'
+            }}
+          />
+          <div style={{
+            flex: '1',
+            backgroundColor: '#111',
+            padding: '30px',
+            borderRadius: '4px',
+            maxWidth: '600px',
+            marginTop: '50px',
+            marginLeft: '20px'
+          }}>
+            <p style={{
+              fontSize: '18px',
+              lineHeight: '1.6',
+              color: '#ccc'
+            }}>
+              I'm currently pursuing a Bachelor's in Business & Design with concentrations in Marketing and Finance. As an active problem solver, I apply everything I've learned from the incredible people I am fortunate to call my friends and companions. At the moment, I'm dedicating my time to personal product design, merchandising, and advertising. I'm also committed to expanding my skill set by learning various software tools and coding languages.
+            </p>
+          </div>
+        </div>
+
         <div className="resume-section">
           <h2>Experience</h2>
           
@@ -64,10 +101,10 @@ function Resume() {
             </div>
             <div className="exp-subheader">
               <p>Photography Staff</p>
-              <span>Deicenber 2024 – Present</span>
+              <span>December 2024 – Present</span>
             </div>
             <ul>
-              <li>• Contributed to a student-run newspaper, providing on-call photography support for headshots, news strories, and editorials </li>
+              <li>• Contributed to a student-run newspaper, providing on-call photography support for headshots, news stories, and editorials</li>
               <li>• Captured images for school-related sports games, events, and student-affiliated activities, while also contributing to stories in the Lifestyles, Sports, and City section of the paper</li>
             </ul>
           </div>
@@ -131,7 +168,7 @@ function Resume() {
             </div>
             <p>Concentrations: Marketing & Finance</p>
             <p>GPA: 3.3</p>
-            <p>Activities: Intermural Soccer, Club Squash, Northeastern Electric Racing, The Huntington News </p>
+            <p>Activities: Intramural Soccer, Club Squash, Northeastern Electric Racing, The Huntington News</p>
             <p className="courses">Relevant Courses: Financial Accounting and Reporting; Macroeconomics; Interactive Design Principles; Business Statistics; Financial Management; Marketing Research</p>
           </div>
 

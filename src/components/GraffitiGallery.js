@@ -8,12 +8,12 @@ import '../styles/GraffitiGallery.css';
 const GraffitiGallery = () => {
     const navigate = useNavigate();
     
-    // Adjust image width based on screen size
+    // Increase the base image width
     const getImageWidth = () => {
         const screenWidth = window.innerWidth;
-        if (screenWidth <= 480) return 140; // phones
-        if (screenWidth <= 768) return 160; // tablets
-        return 300; // desktop
+        if (screenWidth <= 480) return 160;  // Adjusted for phones
+        if (screenWidth <= 768) return 200;  // Adjusted for tablets
+        return 350;  // Adjusted for desktop
     };
     
     const imageWidth = getImageWidth();
@@ -23,55 +23,60 @@ const GraffitiGallery = () => {
     const getInitialPosition = (index) => {
         const isMobile = window.innerWidth <= 768;
         
-        if (isMobile) {
-            const column = index % 2;
-            const row = Math.floor(index / 2);
-            const columnWidth = imageWidth + gap;
-            const startX = (window.innerWidth - (columnWidth * 2)) / 2;
-            
-            // Adjust vertical position to be more visible
+        if (index < 6) {
+            // First 6 images (original grid)
+            const isTopRow = index < 3;
+            const rowIndex = isTopRow ? index : index - 3;
+            const startX = (window.innerWidth - (imageWidth * 3) - (gap * 2)) / 2;
             return {
-                x: startX + (column * columnWidth),
-                y: 100 + (row * (imageWidth + gap))
+                x: startX + (rowIndex * (imageWidth + gap)),
+                y: isTopRow ? 80 : 80 + imageWidth + gap
+            };
+        } else if (index < 8) {
+            // Goya images (index 6-7)
+            const goyaIndex = index - 6;
+            const goyaWidth = goyaIndex === 0 ? 1108 : 1363;
+            const startX = (window.innerWidth - goyaWidth) / 2;
+            return {
+                x: startX,
+                y: 80 + (imageWidth + gap) * 2 + (goyaIndex * (350 + gap))
             };
         } else {
-            // Original desktop layout
-            const isTopRow = index < 4;
-            if (isTopRow) {
-                const topRowWidth = (imageWidth * 4) + (gap * 3);
-                const startX = Math.max(20, (window.innerWidth - topRowWidth) / 2 - 50);
-                return {
-                    x: startX + (index * (imageWidth + gap)),
-                    y: 80
-                };
-            } else {
-                const bottomRowWidth = (imageWidth * 3) + (gap * 2);
-                const startX = Math.max(20, (window.innerWidth - bottomRowWidth) / 2 - 50);
-                const bottomIndex = index - 4;
-                return {
-                    x: startX + (bottomIndex * (imageWidth + gap)),
-                    y: 80 + imageWidth + gap
-                };
-            }
+            // New section (index 8-10)
+            const newSectionIndex = index - 8;
+            const startX = (window.innerWidth - (imageWidth * 3) - (gap * 2)) / 2;
+            return {
+                x: startX + (newSectionIndex * (imageWidth + gap)),
+                y: 80 + (imageWidth + gap) * 2 + (350 + gap) * 2 + 100 // Position below Goya images with extra spacing
+            };
         }
     };
     
     // Updated image URLs with correct file extensions
     const imageUrls = [
-        '/graffiti/Coinsorter.png',  // New image
-        '/graffiti/Coinsorter2.png',
-        '/graffiti/jackethook.png',
-        '/graffiti/jackethook2.png',
-        '/graffiti/WindowShelf.png',
-        '/graffiti/WindowShelf2.png',
+        '/Product-design/Coinsorter.png',
+        '/Product-design/Coinsorter2.png',
+        '/Product-design/jackethook.png',
+        '/Product-design/jackethook2.png',
+        '/Product-design/WindowShelf.png',
+        '/Product-design/WindowShelf2.png',
+        '/Product-design/Goya-1.png',
+        '/Product-design/Goya-2.png',
+        '/Product-design/Shelf-Sidex.png',
+        '/Product-design/shelfWheels-Sidex.png',
+        '/Product-design/Box-Sidex.png',
     ];
     
     const [images, setImages] = useState(
+<<<<<<< HEAD
         Array.from({length: 6}, (_, i) => ({
+=======
+        Array.from({length: 11}, (_, i) => ({
+>>>>>>> master
             id: i,
             src: imageUrls[i],
-            width: imageWidth,
-            height: imageWidth,
+            width: i === 6 ? 1108 : i === 7 ? 1363 : imageWidth,
+            height: i === 6 ? 274 : i === 7 ? 337 : imageWidth * 0.75,  // Made regular images shorter
             ...getInitialPosition(i),
             zIndex: 1
         }))
@@ -84,8 +89,8 @@ const GraffitiGallery = () => {
             setImages(prevImages => 
                 prevImages.map((img, index) => ({
                     ...img,
-                    width: newWidth,
-                    height: newWidth,
+                    width: index >= 6 ? newWidth * 2 : newWidth,
+                    height: index >= 6 ? newWidth * 0.6 : newWidth,
                     ...getInitialPosition(index)
                 }))
             );
@@ -220,12 +225,14 @@ const GraffitiGallery = () => {
                             <div className="image-wrapper">
                                 <img 
                                     src={image.src}
-                                    alt={`Graffiti artwork ${image.id + 1}`}
+                                    alt={`Product design ${image.id + 1}`}
                                     className="gallery-image"
                                     style={{
                                         width: '100%',
                                         height: '100%',
-                                        objectFit: 'cover'
+                                        objectFit: 'contain',  // Changed from 'cover' to 'contain'
+                                        padding: '10px',  // Add some padding to prevent edge cropping
+                                        backgroundColor: 'black'  // Keep black background
                                     }}
                                 />
                                 {!focusedImage && (
