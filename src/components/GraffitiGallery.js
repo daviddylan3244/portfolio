@@ -72,7 +72,7 @@ const GraffitiGallery = () => {
             id: i,
             src: imageUrls[i],
             width: i === 6 ? 1108 : i === 7 ? 1363 : imageWidth,
-            height: i === 6 ? 274 : i === 7 ? 337 : imageWidth * 0.75,  // Made regular images shorter
+            height: i === 6 ? 274 : i === 7 ? 337 : imageWidth * 0.75,
             ...getInitialPosition(i),
             zIndex: 1
         }))
@@ -167,7 +167,7 @@ const GraffitiGallery = () => {
     };
 
     return (
-        <div style={{ backgroundColor: 'black', minHeight: '100vh', color: 'white', overflow: 'hidden' }}>
+        <div style={{ backgroundColor: 'black', minHeight: '100vh', color: 'white' }}>
             <div className="header-container">
                 <div className="header-nav">
                     <button 
@@ -192,10 +192,9 @@ const GraffitiGallery = () => {
             </div>
             <div style={{ 
                 position: 'relative', 
-                height: 'calc(100vh - 80px)',
+                minHeight: 'calc(200vh)', // Make the container taller
                 padding: '10px',
-                overflowY: 'auto',
-                overflowX: 'hidden' // Prevent horizontal scrolling
+                overflow: 'visible' // Allow content to overflow
             }}>
                 {images.map((image) => (
                     <Draggable
@@ -204,15 +203,20 @@ const GraffitiGallery = () => {
                         bounds="parent"
                         onStart={() => bringToFront(image.id)}
                         disabled={focusedImage !== null}
+                        grid={[1, 1]}
+                        scale={1}
+                        enableUserSelectHack={false}
                     >
                         <div 
-                            className={`draggable-image-container ${focusedImage === image.id ? 'focused' : ''}`}
+                            className="draggable-image-container"
                             style={{
                                 position: 'absolute',
                                 width: `${image.width}px`,
                                 height: `${image.height}px`,
                                 zIndex: focusedImage === image.id ? 2000 : image.zIndex,
-                                transition: focusedImage !== null ? 'all 0.3s ease' : 'none'
+                                transform: 'translate3d(0,0,0)',
+                                willChange: 'transform',
+                                transition: 'none'
                             }}
                             onClick={() => bringToFront(image.id)}
                             onMouseEnter={() => handleMouseEnter(image.id)}
@@ -226,9 +230,11 @@ const GraffitiGallery = () => {
                                     style={{
                                         width: '100%',
                                         height: '100%',
-                                        objectFit: 'contain',  // Changed from 'cover' to 'contain'
-                                        padding: '10px',  // Add some padding to prevent edge cropping
-                                        backgroundColor: 'black'  // Keep black background
+                                        objectFit: 'contain',
+                                        padding: '10px',
+                                        backgroundColor: 'black',
+                                        transform: 'translate3d(0,0,0)',
+                                        backfaceVisibility: 'hidden'
                                     }}
                                 />
                                 {!focusedImage && (
