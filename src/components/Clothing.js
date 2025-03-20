@@ -45,11 +45,11 @@ const Clothing = () => {
     ];
 
     const pieces2 = [
-        { src: '/photos/MFA.jpg', title: 'Museum of Fine Arts', year: '2025' },
+        { src: '/photos/MFA.JPG', title: 'Museum of Fine Arts', year: '2025' },
         { src: '/photos/Nydia.jpg', title: 'Nydia Caro Concert', year: '2025' },
-        { src: '/photos/Hockey-2.jpg', title: 'Northeastern Hockey', year: '2024' },
+        { src: '/photos/Hockey-2.JPG', title: 'Northeastern Hockey', year: '2024' },
         { src: '/photos/Chinese New Year-47.jpg', title: 'Chinese New Year Event', year: '2025' },
-        { src: '/photos/IsabellaStewartGardnerMuseum.jpg', title: 'Isabella Stewart Gardner Museum', year: '2025' }
+        { src: '/photos/ISGM.jpg', title: 'Isabella Stewart Gardner Museum', year: '2025' }
     ];
 
     const [enlargedId, setEnlargedId] = useState(null);
