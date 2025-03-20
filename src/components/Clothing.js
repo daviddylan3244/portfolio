@@ -74,14 +74,29 @@ const Clothing = () => {
     const getInitialPosition = (index) => {
         const staggerX = getStaggerX();
         const screenWidth = window.innerWidth;
-        const centerX = (screenWidth - (getImageWidth() + (staggerX * 4))) / 2 + (screenWidth <= 768 ? 250 : 450);
-        const baseY = screenWidth <= 768 ? window.innerHeight / 5 : window.innerHeight / 4;
+        const isMobile = screenWidth <= 768;
         
-        const arcHeight = screenWidth <= 480 ? -60 : -120; // Smaller arc for mobile
+        // Fixed Y positions for mobile
+        const firstCarouselY = isMobile ? 150 : window.innerHeight / 4;
+        const secondCarouselY = isMobile ? 450 : window.innerHeight / 2 + 100;
+        
+        // Define baseY and arcHeight here
+        const baseY = window.innerHeight / 4;
+        const arcHeight = isMobile ? -60 : -120;
+        
+        // Adjust center position calculation
+        const centerX = isMobile 
+            ? (screenWidth / 2) - (getImageWidth() / 2) 
+            : (screenWidth - (getImageWidth() + (staggerX * 4))) / 2 + 450;
+
         const adjustedIndex = index - 2;
         const x = centerX + (adjustedIndex * staggerX);
-        const y = baseY + (Math.sin((index / (pieces.length - 1)) * Math.PI) * arcHeight);
         
+        // Use fixed Y positions instead of arc calculation on mobile
+        const y = isMobile 
+            ? (index < 5 ? firstCarouselY : secondCarouselY)
+            : baseY + (Math.sin((index / (pieces.length - 1)) * Math.PI) * arcHeight);
+
         return { x, y };
     };
 
