@@ -21,7 +21,7 @@ const GraffitiGallery = () => {
     
     // Reorganize positions for 2 columns (3+2 layout on mobile)
     const getInitialPosition = (index) => {
-        const isMobile = window.innerWidth <= 768;
+        // const isMobile = window.innerWidth <= 768;
         
         if (index < 6) {
             // First 6 images (original grid)
@@ -94,7 +94,7 @@ const GraffitiGallery = () => {
 
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
-    }, []);
+    }, [getInitialPosition]);
 
     const bringToFront = (id) => {
         setImages(prevImages => prevImages.map(img => ({
