@@ -48,16 +48,16 @@ const CLOSE_BUTTON_GAP_PX = 10;
 // Optional srcFull is used in the large viewer when present; falls back to src.
 // ---------------------------------------------------------------------------
 const STREAM_LIBRARY = [
-    { id: 'hockey-1', src: '/Photos/hockey-1.JPG' },
-    { id: 'ica', src: '/Photos/ICA.jpg' },
-    { id: 'redbull', src: '/Photos/redbullEvent-copy.jpg' },
-    { id: 'blackfires', src: '/Photos/blackfires.jpg' },
-    { id: 'boston', src: '/Photos/boston.jpg' },
-    { id: 'mfa', src: '/Photos/MFA.JPG' },
-    { id: 'nydia', src: '/Photos/Nydia.jpg' },
-    { id: 'hockey-2', src: '/Photos/hockey2.JPG' },
-    { id: 'chinese-new-year', src: '/Photos/Chinese New Year-47.jpg' },
-    { id: 'isgm', src: '/Photos/ISGM.jpg' },
+    { id: 'hockey-1', src: '/photos/hockey-1.JPG' },
+    { id: 'ica', src: '/photos/ICA.jpg' },
+    { id: 'redbull', src: '/photos/redbullEvent-copy.jpg' },
+    { id: 'blackfires', src: '/photos/blackfires.jpg' },
+    { id: 'boston', src: '/photos/boston.jpg' },
+    { id: 'mfa', src: '/photos/MFA.JPG' },
+    { id: 'nydia', src: '/photos/Nydia.jpg' },
+    { id: 'hockey-2', src: '/photos/hockey2.JPG' },
+    { id: 'chinese-new-year', src: '/photos/Chinese New Year-47.jpg' },
+    { id: 'isgm', src: '/photos/ISGM.jpg' },
 ];
 
 function loadLibraryItem(item) {
