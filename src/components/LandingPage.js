@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/LandingPage.css';
 
@@ -13,12 +13,15 @@ function randomScrambleChar() {
   return SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
 }
 
-function useDecryptedText(text, { animate, delay = 0 }) {
+function useDecryptedText(text, { animate, delay = 0, onComplete }) {
   const [display, setDisplay] = useState(animate ? '' : text);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   useEffect(() => {
     if (!animate) {
       setDisplay(text);
+      onCompleteRef.current?.();
       return undefined;
     }
 
@@ -36,6 +39,13 @@ function useDecryptedText(text, { animate, delay = 0 }) {
 
     let frame = 0;
     let rafId;
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      onCompleteRef.current?.();
+    };
 
     const tick = () => {
       let settled = 0;
@@ -55,7 +65,10 @@ function useDecryptedText(text, { animate, delay = 0 }) {
 
       setDisplay(output);
 
-      if (settled === queue.length) return;
+      if (settled === queue.length) {
+        finish();
+        return;
+      }
       frame += 1;
       rafId = requestAnimationFrame(tick);
     };
@@ -73,8 +86,8 @@ function useDecryptedText(text, { animate, delay = 0 }) {
   return display;
 }
 
-function DecryptText({ text, animate, delay, className }) {
-  const display = useDecryptedText(text, { animate, delay });
+function DecryptText({ text, animate, delay, className, onComplete }) {
+  const display = useDecryptedText(text, { animate, delay, onComplete });
 
   return (
     <span className={className ? `decrypt ${className}` : 'decrypt'}>
@@ -95,6 +108,7 @@ function LandingPage() {
   });
 
   const animate = !prefersReducedMotion;
+  const [titleDecoded, setTitleDecoded] = useState(!animate);
 
   const handleTouch = (event) => {
     const element = event.currentTarget;
@@ -117,6 +131,7 @@ function LandingPage() {
               text="daviddylan.digital"
               animate={animate}
               delay={200}
+              onComplete={() => setTitleDecoded(true)}
             />
           </span>
         </div>
@@ -137,6 +152,18 @@ function LandingPage() {
           </button>
         </div>
       </div>
+      <p
+        className={`reconstruction-notice${titleDecoded ? ' is-visible' : ''}`}
+      >
+        **Site Under Reconstruction**
+      </p>
+      <p
+        className={`reconstruction-notice reconstruction-notice-sub${
+          titleDecoded ? ' is-visible' : ''
+        }`}
+      >
+        **Initial Prototype Version**
+      </p>
     </div>
   );
 }
