@@ -8,7 +8,7 @@ function Store() {
   const navigate = useNavigate();
 
   return (
-    <div className="page-transition" style={{ backgroundColor: 'black', minHeight: '100vh', color: 'white' }}>
+    <div className="page-transition" style={{ backgroundColor: 'transparent', minHeight: '100vh', color: 'white' }}>
       <div className="header-container">
         <div className="header-nav">
           <button 

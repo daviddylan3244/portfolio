@@ -7,7 +7,7 @@ function Resume() {
   const navigate = useNavigate();
 
   return (
-    <div style={{ backgroundColor: 'black', minHeight: '100vh', color: 'white' }}>
+    <div style={{ backgroundColor: 'transparent', minHeight: '100vh', color: 'white' }}>
       <div className="header-container">
         <div className="header-nav">
           <button 
@@ -47,7 +47,7 @@ function Resume() {
           marginTop: '20px'
         }}>
           <img 
-            src="/photos/David-HS.JPG"
+            src="/Photos/David-HS.JPG"
             alt="David Dylan Martinez-Dimnet"
             style={{
               width: '300px',

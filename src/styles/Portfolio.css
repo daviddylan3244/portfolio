@@ -133,7 +133,7 @@ li {
 }
 
 .portfolio-container {
-    background-color: black;
+    background-color: transparent;
     min-height: 100vh;
     color: white;
     display: flex;

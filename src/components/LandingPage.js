@@ -2,88 +2,138 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/LandingPage.css';
 
+const SCRAMBLE_CHARS = '!<>-_\\/[]{}=+*^?#$%&@ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+// Frames each character spends scrambling before it locks into place.
+const CHARS_PER_FRAME = 0.42;
+const MIN_SCRAMBLE_FRAMES = 13;
+const EXTRA_SCRAMBLE_FRAMES = 19;
+
+function randomScrambleChar() {
+  return SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
+}
+
+function useDecryptedText(text, { animate, delay = 0 }) {
+  const [display, setDisplay] = useState(animate ? '' : text);
+
+  useEffect(() => {
+    if (!animate) {
+      setDisplay(text);
+      return undefined;
+    }
+
+    const queue = text.split('').map((char, index) => {
+      const start = Math.floor(index / CHARS_PER_FRAME);
+      return {
+        char,
+        start,
+        end:
+          start +
+          MIN_SCRAMBLE_FRAMES +
+          Math.floor(Math.random() * EXTRA_SCRAMBLE_FRAMES),
+      };
+    });
+
+    let frame = 0;
+    let rafId;
+
+    const tick = () => {
+      let settled = 0;
+
+      const output = queue
+        .map(({ char, start, end }) => {
+          if (frame >= end) {
+            settled += 1;
+            return char;
+          }
+          if (frame >= start) {
+            return char === ' ' ? ' ' : randomScrambleChar();
+          }
+          return '';
+        })
+        .join('');
+
+      setDisplay(output);
+
+      if (settled === queue.length) return;
+      frame += 1;
+      rafId = requestAnimationFrame(tick);
+    };
+
+    const timeoutId = setTimeout(() => {
+      rafId = requestAnimationFrame(tick);
+    }, delay);
+
+    return () => {
+      clearTimeout(timeoutId);
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [text, animate, delay]);
+
+  return display;
+}
+
+function DecryptText({ text, animate, delay, className }) {
+  const display = useDecryptedText(text, { animate, delay });
+
+  return (
+    <span className={className ? `decrypt ${className}` : 'decrypt'}>
+      <span className="decrypt-sizer" aria-hidden="true">
+        {text}
+      </span>
+      <span className="decrypt-value">{display || '\u00A0'}</span>
+    </span>
+  );
+}
+
 function LandingPage() {
   const navigate = useNavigate();
-  const [onlineText, setOnlineText] = useState('');
-  const [portfolioText, setPortfolioText] = useState('');
-  const [storeText, setStoreText] = useState('');
-  const [isHovered, setIsHovered] = useState(false);
-  
-  useEffect(() => {
-    const typeText = (text, setText, delay) => {
-      return new Promise((resolve) => {
-        let index = 0;
-        setTimeout(() => {
-          const interval = setInterval(() => {
-            if (index < text.length) {
-              setText(text.slice(0, index + 1));
-              index++;
-            } else {
-              clearInterval(interval);
-              resolve();
-            }
-          }, 150);
-        }, delay);
-      });
-    };
 
-    const animateText = async () => {
-      // Added a 500ms delay to all animations
-      Promise.all([
-        typeText('David Dylan\'s Design', setOnlineText, 500),
-        typeText('Portfolio', setPortfolioText, 500),
-        typeText('Store', setStoreText, 500)
-      ]);
-    };
+  const [prefersReducedMotion] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  });
 
-    animateText();
-
-    // Cleanup function
-    return () => {
-      setOnlineText('');
-      setPortfolioText('');
-      setStoreText('');
-    };
-  }, []);
+  const animate = !prefersReducedMotion;
 
   const handleTouch = (event) => {
     const element = event.currentTarget;
     element.classList.add('touched');
     setTimeout(() => {
       element.classList.remove('touched');
-    }, 300); // Remove class after animation completes
-  };
-
-  const handleHover = (hovering) => {
-    setIsHovered(hovering);
+    }, 300);
   };
 
   return (
     <div className="landing-container">
       <div className="content-wrapper">
-        <div 
+        <div
           className="logo-online-container"
-          onMouseEnter={() => handleHover(true)}
-          onMouseLeave={() => handleHover(false)}
           onClick={() => navigate('/')}
           onTouchStart={handleTouch}
         >
-          <span className="logo-text">David Dylan's Design</span>
+          <span className="logo-text">
+            <DecryptText
+              text="daviddylan.digital"
+              animate={animate}
+              delay={200}
+            />
+          </span>
         </div>
         <div className="button-container">
-          <button 
-            onClick={() => navigate('/portfolio')} 
+          <button
+            onClick={() => navigate('/portfolio')}
             onTouchStart={handleTouch}
             className="nav-button"
           >
-            {portfolioText || '\u00A0'}
+            <DecryptText text="Portfolio" animate={animate} delay={650} />
           </button>
-          <button 
-            onClick={() => navigate('/store')} 
+          <button
+            onClick={() => navigate('/store')}
             onTouchStart={handleTouch}
             className="nav-button store-button"
           >
-            {storeText || '\u00A0'}
+            <DecryptText text="Store" animate={animate} delay={800} />
           </button>
         </div>
       </div>
@@ -91,4 +141,4 @@ function LandingPage() {
   );
 }
 
-export default LandingPage; 
+export default LandingPage;

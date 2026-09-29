@@ -1,155 +1,159 @@
 .landing-container {
-  background-color: black;
+  --font-display: 'Special Elite', monospace;
+
   min-height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
+  padding: 1.5rem;
+  font-family: var(--font-display);
+  position: relative;
+  overflow: hidden;
+  background-color: #9a7553;
+  background-image:
+    /* specular gloss pooling near the top */
+    radial-gradient(
+      58% 42% at 50% 0%,
+      rgba(255, 243, 226, 0.7) 0%,
+      rgba(255, 243, 226, 0) 62%
+    ),
+    /* warm bounce light off the floor */
+    radial-gradient(
+      85% 50% at 50% 104%,
+      rgba(255, 226, 190, 0.22) 0%,
+      rgba(255, 226, 190, 0) 62%
+    ),
+    /* vignette that rounds the surface into the corners */
+    radial-gradient(
+      125% 105% at 50% 42%,
+      rgba(38, 25, 15, 0) 42%,
+      rgba(38, 25, 15, 0.58) 100%
+    ),
+    /* body of the material */
+    linear-gradient(
+      180deg,
+      #c3a47c 0%,
+      #a58059 34%,
+      #86613f 68%,
+      #5d422b 100%
+    );
+}
+
+/* Glassy sheen sweeping across the upper surface. */
+.landing-container::before {
+  content: '';
+  position: absolute;
+  top: -35%;
+  left: -10%;
+  right: -10%;
+  height: 90%;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.34) 0%,
+    rgba(255, 255, 255, 0.08) 45%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  border-radius: 0 0 50% 50% / 0 0 34% 34%;
+  pointer-events: none;
 }
 
 .content-wrapper {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.25rem;
-  position: relative;
+  gap: 0.5rem;
 }
 
 .logo-online-container {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0rem;
+  justify-content: center;
   cursor: pointer;
   text-align: center;
   width: 100%;
   position: relative;
 }
 
-.image-container {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  margin-top: -5vh;
-  margin-bottom: -0.5rem;
-  display: flex;
-  justify-content: center;
-  transform-origin: center;
+.logo-text {
+  font-family: var(--font-display);
+  color: #ffffff;
+  white-space: nowrap;
+  text-align: center;
+  padding: 0 15px;
+  text-shadow:
+    0 1px 1px rgba(46, 30, 18, 0.45),
+    0 4px 14px rgba(38, 25, 15, 0.5);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    text-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.online-text {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  margin: 0;
-  font-size: 2.5rem;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  transform: translateY(0.25vh);
-  position: relative;
-}
-
-.online-text .nav-button {
-  font-size: 2.5rem;
-  padding: 5px;
-  position: relative;
-  transform-origin: center;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.image-container.hovered {
-  transform: scale(1.1);
-  filter: brightness(0.8);
-}
-
-.online-text.hovered .nav-button {
-  transform: scale(1.1);
-  filter: brightness(0.8);
-}
-
-.logo {
-  max-width: 400px;
-  width: 90%;
-  height: auto;
-  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.3));
-}
-
-.logo-online-container:hover .logo {
-  filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.4)) brightness(0.8);
+.logo-online-container:hover .logo-text {
+  transform: translateY(-2px);
+  text-shadow:
+    0 1px 1px rgba(46, 30, 18, 0.45),
+    0 8px 22px rgba(38, 25, 15, 0.55),
+    0 0 26px rgba(255, 244, 228, 0.35);
 }
 
 .button-container {
   display: flex;
   gap: 0.5rem;
   justify-content: center;
-  margin-top: 0.25rem;
-  transform: translateX(-0.5rem);
+  flex-wrap: wrap;
 }
 
 .nav-button {
-  padding: 15px 15px;
+  font-family: var(--font-display);
   font-size: 1.5rem;
+  padding: 15px;
+  min-width: 120px;
   background: transparent;
   border: none;
-  color: white;
+  color: #ffffff;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  font-family: 'Special Elite', monospace;
-  min-width: 120px;
   text-align: center;
+  text-shadow:
+    0 1px 1px rgba(46, 30, 18, 0.45),
+    0 3px 10px rgba(38, 25, 15, 0.45);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    text-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .nav-button:hover,
-.nav-button:active,
 .nav-button.touched {
   transform: scale(1.1);
+  text-shadow:
+    0 1px 1px rgba(46, 30, 18, 0.45),
+    0 6px 16px rgba(38, 25, 15, 0.5),
+    0 0 22px rgba(255, 244, 228, 0.4);
 }
 
-.typewriter {
-  display: inline-block;
-  overflow: hidden;
-  white-space: nowrap;
-  width: 0;
-  animation: typing 2s steps(9) forwards;
+.nav-button:active {
+  transform: scale(1.04);
 }
 
-.delay-portfolio {
-  animation-delay: 0.5s;
-  width: 0;
-  animation-duration: 1.5s;
-  animation-timing-function: steps(9);
+.nav-button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 4px;
 }
 
-.delay-store {
-  animation-delay: 2.5s;
-  width: 0;
-  animation-duration: 1s;
-  animation-timing-function: steps(5);
+/* Reserves the final text width so decrypting never shifts the layout. */
+.decrypt {
+  display: inline-grid;
 }
 
-@keyframes typing {
-  from { 
-    width: 0;
-    opacity: 1;
-  }
-  to { 
-    width: 100%;
-    opacity: 1;
-  }
+.decrypt-sizer,
+.decrypt-value {
+  grid-area: 1 / 1;
 }
 
-.store-button {
-  margin-left: 0.5rem;
-  transform: translateX(4%);
+.decrypt-sizer {
+  visibility: hidden;
 }
 
-.logo-text {
-  color: white;
-  font-family: 'Special Elite', monospace;
-  white-space: nowrap;
-  text-align: center;
-  width: 100%;
-  padding: 0 15px;
-}
-
-.logo-online-container:hover .logo-text {
-  filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.4)) brightness(0.8);
+.decrypt-value {
+  justify-self: center;
+  white-space: pre;
 }
 
 @media (min-width: 1024px) {
@@ -168,11 +172,22 @@
   .logo-text {
     font-size: 2rem;
   }
+
+  .nav-button {
+    padding: 10px;
+    font-size: 1.2rem;
+    min-width: 90px;
+  }
 }
 
 @media (max-width: 480px) {
   .logo-text {
     font-size: 1.5rem;
+  }
+
+  .nav-button {
+    font-size: 1rem;
+    min-width: 80px;
   }
 }
 
@@ -182,33 +197,9 @@
   }
 }
 
-@media (max-width: 768px) {
-  .logo {
-    max-width: 300px;
-  }
-
+@media (prefers-reduced-motion: reduce) {
+  .logo-text,
   .nav-button {
-    padding: 10px 10px;
-    font-size: 1.2rem;
-    min-width: 90px;
-  }
-
-  .button-container {
-    transform: translateX(-0.75rem);
+    transition: none;
   }
 }
-
-@media (max-width: 480px) {
-  .logo {
-    max-width: 250px;
-  }
-
-  .nav-button {
-    font-size: 1rem;
-    min-width: 80px;
-  }
-
-  .button-container {
-    transform: translateX(-0.5rem);
-  }
-} 

@@ -4,8 +4,44 @@
   box-sizing: border-box;
 }
 
+html {
+  min-height: 100%;
+}
+
 body {
   font-family: Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  color: white;
+
+  /* Muted, darker sibling of the landing page surface so photography
+     stays the brightest thing on the page. */
+  background-color: #4a4036;
+  background-image:
+    radial-gradient(
+      58% 40% at 50% 0%,
+      rgba(233, 223, 209, 0.22) 0%,
+      rgba(233, 223, 209, 0) 62%
+    ),
+    radial-gradient(
+      85% 50% at 50% 104%,
+      rgba(214, 196, 173, 0.08) 0%,
+      rgba(214, 196, 173, 0) 62%
+    ),
+    radial-gradient(
+      125% 105% at 50% 42%,
+      rgba(16, 13, 10, 0) 40%,
+      rgba(16, 13, 10, 0.55) 100%
+    ),
+    linear-gradient(
+      180deg,
+      #6f6252 0%,
+      #5a4e41 34%,
+      #443a30 68%,
+      #2c2620 100%
+    );
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  background-size: cover;
 } 
