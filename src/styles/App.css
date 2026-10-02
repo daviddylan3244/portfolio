@@ -8,17 +8,38 @@ html {
   min-height: 100%;
 }
 
-body {
-  font-family: Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  min-height: 100vh;
-  color: white;
+:root {
+  /* Relative-luminance ratio of Portfolio's gradient to the home page's.
+     Level 3 multiplies Portfolio's luminance by this same step. */
+  --bg-darken-ratio: 0.322;
 
-  /* Muted, darker sibling of the landing page surface so photography
-     stays the brightest thing on the page. */
-  background-color: #4a4036;
-  background-image:
+  --bg-level-1-color: #9a7553;
+  --bg-level-1-image:
+    radial-gradient(
+      58% 42% at 50% 0%,
+      rgba(255, 243, 226, 0.7) 0%,
+      rgba(255, 243, 226, 0) 62%
+    ),
+    radial-gradient(
+      85% 50% at 50% 104%,
+      rgba(255, 226, 190, 0.22) 0%,
+      rgba(255, 226, 190, 0) 62%
+    ),
+    radial-gradient(
+      125% 105% at 50% 42%,
+      rgba(38, 25, 15, 0) 42%,
+      rgba(38, 25, 15, 0.58) 100%
+    ),
+    linear-gradient(
+      180deg,
+      #c3a47c 0%,
+      #a58059 34%,
+      #86613f 68%,
+      #5d422b 100%
+    );
+
+  --bg-level-2-color: #4a4036;
+  --bg-level-2-image:
     radial-gradient(
       58% 40% at 50% 0%,
       rgba(233, 223, 209, 0.22) 0%,
@@ -41,6 +62,49 @@ body {
       #443a30 68%,
       #2c2620 100%
     );
+
+  --bg-level-3-color: #29231c;
+  --bg-level-3-image:
+    radial-gradient(
+      58% 40% at 50% 0%,
+      rgba(140, 134, 125, 0.071) 0%,
+      rgba(140, 134, 125, 0) 62%
+    ),
+    radial-gradient(
+      85% 50% at 50% 104%,
+      rgba(128, 117, 103, 0.026) 0%,
+      rgba(128, 117, 103, 0) 62%
+    ),
+    radial-gradient(
+      125% 105% at 50% 42%,
+      rgba(6, 4, 3, 0) 40%,
+      rgba(6, 4, 3, 0.55) 100%
+    ),
+    linear-gradient(
+      180deg,
+      #40382e 0%,
+      #332b23 34%,
+      #251f19 68%,
+      #16120f 100%
+    );
+}
+
+body {
+  font-family: Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  color: white;
+  background-color: var(--bg-level-2-color);
+  background-image: var(--bg-level-2-image);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  background-size: cover;
+}
+
+.bg-level-3 {
+  background-color: var(--bg-level-3-color);
+  background-image: var(--bg-level-3-image);
   background-repeat: no-repeat;
   background-attachment: fixed;
   background-size: cover;

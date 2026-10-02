@@ -23,9 +23,18 @@
     transform: scale(1.05);
 }
 
+.bg-level-3:has(> .gallery-viewport) {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+}
+
 .gallery-viewport {
     position: relative;
-    height: calc(100vh - 80px);
+    flex: 1;
+    min-height: 0;
     overflow: auto;
     padding: 10px;
 }

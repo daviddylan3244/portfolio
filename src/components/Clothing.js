@@ -292,6 +292,15 @@ function Clothing() {
             ? section.parentElement.querySelector('.header-nav')
             : null;
         const rowPose = rows.map(() => ({ ty: 0, scale: 1 }));
+        const fineHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+        let pointerX = 0;
+        let pointerY = 0;
+        let pointerInside = false;
+        let hoverSlot = null;
+        let hoverVisible = false;
+        const hoverRing = document.createElement('div');
+        hoverRing.className = 'stream-hover-ring';
+        if (fineHover) document.body.append(hoverRing);
         const largePromises = new Map();
         let viewer = null;
 
@@ -935,6 +944,9 @@ function Clothing() {
             if (viewer) finishViewer();
             pool.forEach((slot) => slot.el.remove());
             pool.length = 0;
+            hoverSlot = null;
+            hoverVisible = false;
+            hoverRing.style.opacity = '0';
             startedRows.clear();
             libraryCursor = 0;
             rows.forEach((rowEl) => rowEl.replaceChildren());
@@ -1012,6 +1024,103 @@ function Clothing() {
             syncPlayback();
         };
 
+        const slotRect = (slot, rowRects) => {
+            const base = rowRects[slot.row];
+            const pose = rowPose[slot.row];
+            const scale = pose.scale || 1;
+            const originX = base.left + base.width / 2;
+            return {
+                left: originX + (slot.x - base.width / 2) * scale,
+                top: base.top + pose.ty,
+                width: slot.width * scale,
+                height: itemHeight * scale,
+            };
+        };
+
+        const outlinePx = (slot, rowRects) => {
+            const border = viewerBorderPx();
+            const innerWidth = layoutViewer(slot, rowRects).inner.width;
+            if (!(innerWidth > 0) || !(slot.width > 0)) return 0;
+            return (border / innerWidth) * slot.width;
+        };
+
+        const slotUnderPointer = (rowRects) => {
+            for (let i = 0; i < pool.length; i += 1) {
+                const slot = pool[i];
+                if (!slot.spec) continue;
+                if (slot.el.style.pointerEvents === 'none') continue;
+                if (Number(slot.el.style.opacity) === 0) continue;
+                if (viewer && (!isFramingRow(slot.row) || slot === viewer.slot)) continue;
+                const rect = slotRect(slot, rowRects);
+                if (
+                    pointerX >= rect.left &&
+                    pointerX < rect.left + rect.width &&
+                    pointerY >= rect.top &&
+                    pointerY < rect.top + rect.height
+                ) {
+                    const hit = document.elementFromPoint(pointerX, pointerY);
+                    if (!hit || !hit.closest || hit.closest('.stream-item') !== slot.el) {
+                        return null;
+                    }
+                    return slot;
+                }
+            }
+            return null;
+        };
+
+        const placeHoverRing = (slot, rowRects) => {
+            const rect = slotRect(slot, rowRects);
+            hoverRing.style.width = `${rect.width}px`;
+            hoverRing.style.height = `${rect.height}px`;
+            hoverRing.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+        };
+
+        const syncHover = () => {
+            if (!fineHover || (!pointerInside && !hoverSlot)) return;
+            const rowRects = rows.map((row) => row.getBoundingClientRect());
+            const slot = pointerInside ? slotUnderPointer(rowRects) : null;
+            if (slot) {
+                if (slot !== hoverSlot) {
+                    hoverSlot = slot;
+                    hoverRing.style.outlineWidth = `${outlinePx(slot, rowRects)}px`;
+                }
+                hoverVisible = true;
+                hoverRing.style.opacity = '1';
+                placeHoverRing(slot, rowRects);
+                return;
+            }
+            if (!hoverSlot) return;
+            hoverVisible = false;
+            hoverRing.style.opacity = '0';
+            placeHoverRing(hoverSlot, rowRects);
+        };
+
+        const onHoverPointerMove = (event) => {
+            if (event.pointerType === 'touch') {
+                pointerInside = false;
+                return;
+            }
+            pointerX = event.clientX;
+            pointerY = event.clientY;
+            pointerInside = true;
+        };
+
+        const onHoverPointerOut = (event) => {
+            if (event.relatedTarget) return;
+            pointerInside = false;
+        };
+
+        const onHoverFadeEnd = (event) => {
+            if (event.propertyName !== 'opacity' || hoverVisible) return;
+            hoverSlot = null;
+        };
+
+        if (fineHover) {
+            window.addEventListener('pointermove', onHoverPointerMove, { passive: true });
+            window.addEventListener('pointerout', onHoverPointerOut);
+            hoverRing.addEventListener('transitionend', onHoverFadeEnd);
+        }
+
         const tick = (now) => {
             if (!running) return;
             const dt = lastTime ? Math.min(0.05, (now - lastTime) / 1000) : 0;
@@ -1032,6 +1141,7 @@ function Clothing() {
             }
 
             advanceViewer(now, dt);
+            syncHover();
 
             if (running) rafId = requestAnimationFrame(tick);
         };
@@ -1164,6 +1274,11 @@ function Clothing() {
             document.removeEventListener('visibilitychange', onVisibility);
             document.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('resize', onResize);
+            if (fineHover) {
+                window.removeEventListener('pointermove', onHoverPointerMove);
+                window.removeEventListener('pointerout', onHoverPointerOut);
+                hoverRing.remove();
+            }
             window.clearTimeout(resizeTimer);
             document.documentElement.style.overflow = previousHtmlOverflow;
             document.body.style.overflow = previousBodyOverflow;
@@ -1179,7 +1294,7 @@ function Clothing() {
     }, []);
 
     return (
-        <div className="clothing-container">
+        <div className="clothing-container bg-level-3">
             <div className="header-container">
                 <div className="header-nav">
                     <button className="header-button" onClick={() => navigate('/store')}>

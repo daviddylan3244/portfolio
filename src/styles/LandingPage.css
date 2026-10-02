@@ -9,34 +9,8 @@
   font-family: var(--font-display);
   position: relative;
   overflow: hidden;
-  background-color: #9a7553;
-  background-image:
-    /* specular gloss pooling near the top */
-    radial-gradient(
-      58% 42% at 50% 0%,
-      rgba(255, 243, 226, 0.7) 0%,
-      rgba(255, 243, 226, 0) 62%
-    ),
-    /* warm bounce light off the floor */
-    radial-gradient(
-      85% 50% at 50% 104%,
-      rgba(255, 226, 190, 0.22) 0%,
-      rgba(255, 226, 190, 0) 62%
-    ),
-    /* vignette that rounds the surface into the corners */
-    radial-gradient(
-      125% 105% at 50% 42%,
-      rgba(38, 25, 15, 0) 42%,
-      rgba(38, 25, 15, 0.58) 100%
-    ),
-    /* body of the material */
-    linear-gradient(
-      180deg,
-      #c3a47c 0%,
-      #a58059 34%,
-      #86613f 68%,
-      #5d422b 100%
-    );
+  background-color: var(--bg-level-1-color);
+  background-image: var(--bg-level-1-image);
 }
 
 /* Glassy sheen sweeping across the upper surface. */

@@ -392,7 +392,7 @@ const GraffitiGallery = () => {
     }, []);
 
     return (
-        <div style={{ backgroundColor: 'transparent', minHeight: '100vh', color: 'white' }}>
+        <div className="bg-level-3" style={{ minHeight: '100vh', color: 'white' }}>
             <div className="header-container">
                 <div className="header-nav">
                     <button className="header-button" onClick={() => navigate('/portfolio')}>

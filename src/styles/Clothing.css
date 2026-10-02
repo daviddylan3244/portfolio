@@ -1,5 +1,4 @@
 .clothing-container {
-    background-color: transparent;
     height: 100vh;
     height: 100dvh;
     max-height: 100vh;
@@ -14,6 +13,13 @@
     position: relative;
     z-index: 6;
     flex: 0 0 auto;
+    align-items: center;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+.clothing-container .header-logo {
+    margin-top: 0;
 }
 
 .floating-streams {
@@ -27,7 +33,7 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
-    padding: 0.75rem 0 1rem;
+    padding: 0 0 1rem;
     box-sizing: border-box;
 }
 
@@ -91,6 +97,19 @@
 .stream-item:focus-visible {
     outline: 2px solid rgba(255, 255, 255, 0.9);
     outline-offset: 3px;
+}
+
+.stream-hover-ring {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 46;
+    box-sizing: border-box;
+    pointer-events: none;
+    outline: solid #FFFFFF;
+    outline-width: 0;
+    opacity: 0;
+    transition: opacity 150ms ease;
 }
 
 .stream-item.is-hidden {
@@ -169,6 +188,17 @@
     outline: none;
 }
 
+@media (max-width: 360px) {
+    .clothing-container .header-container {
+        padding: var(--menu-inset);
+        min-height: 0;
+    }
+
+    .clothing-container .header-logo {
+        margin-top: 0.35rem;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .stream-item {
         will-change: auto;
@@ -177,7 +207,8 @@
     .floating-streams-row,
     .stream-overlay,
     .stream-close,
-    .stream-flyer {
+    .stream-flyer,
+    .stream-hover-ring {
         transition: none;
     }
 }
