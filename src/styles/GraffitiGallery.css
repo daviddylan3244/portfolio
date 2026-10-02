@@ -170,8 +170,15 @@
     }
 
     .resize-handle {
-        width: 20px;
-        height: 20px;
+        width: 44px;
+        height: 44px;
+        opacity: 1;
+    }
+
+    .header-button.gallery-reset {
+        position: static;
+        text-align: center;
+        opacity: 1;
     }
 
     .resize-arrow {

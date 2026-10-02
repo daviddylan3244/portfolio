@@ -24,15 +24,17 @@ const CANVAS_BOTTOM_PADDING = 320;
 const MIN_CANVAS_HEIGHT = 1200;
 const DOUBLE_TAP_DELAY = 300;
 
-function getBaseWidth(viewportWidth) {
-    if (viewportWidth <= 480) return 160;
-    if (viewportWidth <= 768) return 200;
-    return 350;
+const DESKTOP_BASE = 350;
+
+function bannerSize(index, maxWidth) {
+    const naturalWidth = index === 6 ? 1108 : 1363;
+    const naturalHeight = index === 6 ? 274 : 337;
+    const width = Math.min(naturalWidth, maxWidth);
+    return { width, height: width * (naturalHeight / naturalWidth) };
 }
 
-function buildInitialLayout() {
-    const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
-    const baseWidth = getBaseWidth(viewportWidth);
+function buildDesktopLayout(viewportWidth) {
+    const baseWidth = DESKTOP_BASE;
     const maxWidth = Math.max(MIN_SIZE, viewportWidth - 40);
     const gridStartX = Math.max(
         20,
@@ -44,10 +46,7 @@ function buildInitialLayout() {
         const isBanner = index === 6 || index === 7;
 
         if (isBanner) {
-            const naturalWidth = index === 6 ? 1108 : 1363;
-            const naturalHeight = index === 6 ? 274 : 337;
-            const width = Math.min(naturalWidth, maxWidth);
-            const height = width * (naturalHeight / naturalWidth);
+            const { width, height } = bannerSize(index, maxWidth);
             return {
                 id: index,
                 src,
@@ -74,6 +73,72 @@ function buildInitialLayout() {
             zIndex: 1,
         };
     });
+}
+
+function buildFittingLayout(viewportWidth) {
+    const columns = viewportWidth >= 640 ? 2 : 1;
+    const maxWidth = Math.max(MIN_SIZE, viewportWidth - 40);
+    const baseWidth = Math.max(
+        MIN_SIZE,
+        Math.min(320, Math.floor((maxWidth - GAP * (columns - 1)) / columns))
+    );
+    const gridWidth = baseWidth * columns + GAP * (columns - 1);
+    const startX = Math.max(0, (viewportWidth - gridWidth) / 2);
+    const images = [];
+    let y = 16;
+    let col = 0;
+    let rowHeight = 0;
+
+    IMAGE_URLS.forEach((src, index) => {
+        const isBanner = index === 6 || index === 7;
+        if (isBanner) {
+            if (col !== 0) {
+                y += rowHeight;
+                col = 0;
+                rowHeight = 0;
+            }
+            const { width, height } = bannerSize(index, maxWidth);
+            images.push({
+                id: index,
+                src,
+                width,
+                height,
+                x: Math.max(0, (viewportWidth - width) / 2),
+                y,
+                zIndex: 1,
+            });
+            y += height + GAP;
+            return;
+        }
+
+        const width = Math.min(baseWidth, maxWidth);
+        const height = width * 0.75;
+        images.push({
+            id: index,
+            src,
+            width,
+            height,
+            x: startX + col * (width + GAP),
+            y,
+            zIndex: 1,
+        });
+        rowHeight = Math.max(rowHeight, height + GAP);
+        col += 1;
+        if (col >= columns) {
+            y += rowHeight;
+            col = 0;
+            rowHeight = 0;
+        }
+    });
+
+    return images;
+}
+
+function buildInitialLayout() {
+    const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
+    const desktopGrid = DESKTOP_BASE * 3 + GAP * 2;
+    if (viewportWidth >= desktopGrid + 40) return buildDesktopLayout(viewportWidth);
+    return buildFittingLayout(viewportWidth);
 }
 
 function canvasHeightFor(images) {
@@ -290,6 +355,9 @@ const GalleryImage = React.memo(function GalleryImage({
                     alt={`Product design ${image.id + 1}`}
                     className="gallery-image"
                     draggable={false}
+                    loading="lazy"
+                    width={Math.round(image.width)}
+                    height={Math.round(image.height)}
                 />
                 {!anyFocused && (
                     <div

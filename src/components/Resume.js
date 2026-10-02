@@ -1,29 +1,41 @@
-import React from 'react';
+import React, { useLayoutEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/Header.css';
 import '../styles/Portfolio.css';
 
+const HEADSHOT_SRC = encodeURI('/photos/Website digital/Resume/Headshop-1.jpg');
+
 function Resume() {
   const navigate = useNavigate();
+
+  useLayoutEffect(() => {
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'image';
+    link.href = HEADSHOT_SRC;
+    link.setAttribute('fetchpriority', 'high');
+    document.head.appendChild(link);
+    return () => link.remove();
+  }, []);
 
   return (
     <div style={{ backgroundColor: 'transparent', minHeight: '100vh', color: 'white' }}>
       <div className="header-container">
         <div className="header-nav">
-          <button 
+          <button
             className="header-button"
             onClick={() => navigate('/portfolio')}
           >
             Portfolio
           </button>
-          <button 
+          <button
             className="header-button"
             onClick={() => navigate('/store')}
           >
             Store
           </button>
         </div>
-        <span 
+        <span
           className="header-logo"
           onClick={() => navigate('/')}
         >
@@ -31,174 +43,206 @@ function Resume() {
         </span>
       </div>
       <div className="resume-container">
-        <div className="contact-section">
-          <h1>David Dylan Martínez-Dimnet Díaz-Velarde</h1>
-          <p className="location">Boston, MA</p>
-          <div className="social-links">
-            <a href="https://www.linkedin.com/in/david-martinez-dimnet-25b842295/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+        <h1 className="resume-name">David Dylan <span className="resume-name-part">Martínez-Dimnet</span> <span className="resume-name-part">Díaz-Velarde</span></h1>
+        <div className="resume-intro">
+          <div className="resume-portrait-frame">
+            <img
+              src={HEADSHOT_SRC}
+              alt="David Dylan Martinez-Dimnet"
+              className="resume-portrait"
+              fetchPriority="high"
+              loading="eager"
+            />
+          </div>
+          <div className="contact-section">
+            <p className="location">Boston, MA</p>
+            <div className="social-links">
+              <div>
+                <a href="mailto:martinezdimnet.d@northeastern.edu">martinezdimnet.d@northeastern.edu</a>
+              </div>
+              <div>
+                <a className="linkedin-link" href="https://www.linkedin.com/in/david-martinez-dimnet-25b842295/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+              </div>
+            </div>
+            <p className="resume-bio">I'm pursuing a Bachelor's in Business & Design, concentrating in Marketing and Finance with a minor in Law and Policy. As a problem solver, I apply everything I've learned from the incredible people I'm fortunate to call my friends. Right now, I'm focused on product design, merchandising, and advertising, while learning new software tools and coding languages. My goal is to start an advertising company that creates something the industry hasn't seen before.</p>
           </div>
         </div>
 
-        <div className="profile-section" style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '40px',
-          marginBottom: '40px',
-          marginTop: '20px'
-        }}>
-          <img 
-            src="/photos/David-HS.JPG"
-            alt="David Dylan Martinez-Dimnet"
-            style={{
-              width: '300px',
-              height: '400px',
-              objectFit: 'cover',
-              objectPosition: '45% center',
-              borderRadius: '4px'
-            }}
-          />
-          <div style={{
-            flex: '1',
-            backgroundColor: '#111',
-            padding: '30px',
-            borderRadius: '4px',
-            maxWidth: '600px',
-            marginTop: '50px',
-            marginLeft: '20px'
-          }}>
-            <p style={{
-              fontSize: '18px',
-              lineHeight: '1.6',
-              color: '#ccc'
-            }}>
-              I'm currently pursuing a Bachelor's in Business & Design with concentrations in Marketing and Finance. As an active problem solver, I apply everything I've learned from the incredible people I am fortunate to call my friends and companions. At the moment, I'm dedicating my time to personal product design, merchandising, and advertising. I'm also committed to expanding my skill set by learning various software tools and coding languages.
-            </p>
-          </div>
-        </div>
+        <section className="resume-section" aria-labelledby="experience-heading">
+          <h2 id="experience-heading">Experience</h2>
 
-        <div className="resume-section">
-          <h2>Experience</h2>
-          
-          <div className="experience-item">
-            <div className="exp-header">
-              <h3>Growth Rocket LLC</h3>
-              <span>Boston,MA</span>
-            </div>
-            <div className="exp-subheader">
-              <p>Chief Marketing Officer</p>
-              <span>January 2025 – Present</span>
-            </div>
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Photography & Retouching Co-op</h3>
+              <p className="resume-role-meta">JCDecaux North America · New York City</p>
+              <p className="resume-role-dates">July – December 2025</p>
+            </header>
+            <p className="resume-role-intro">JCDecaux is one of the world's largest outdoor advertising companies, behind the billboards, bus shelters, and street displays seen in cities around the world.</p>
             <ul>
-              <li>• Developed and implemented a new marketing strategy to revitalize a stagnating company, collaborating with team members to drive growth</li>
-              <li>• Currently spearheading the creation of a news spotlight campaign to increase company exposure and attract new clients</li>
+              <li>Worked within the marketing department producing photography and short-form video that supported the sales team's client deliverables, turning live campaigns into visual assets that helped win and retain business.</li>
+              <li>Covered fast-moving, time-sensitive events, including store openings, live performances, and product launches, delivering finished content on tight deadlines alongside the creative team.</li>
+              <li>Created "beauty shots" for clients who purchased post-buy creative services: polished, carefully retouched photographs of their advertisements in the real world, which clients use to showcase their campaigns in context.</li>
+              <li>Handled the full workflow from capture to final edit using Adobe Photoshop, Lightroom Classic, and Premiere Pro.</li>
             </ul>
-          </div>
+          </article>
 
-          <div className="experience-item">
-            <div className="exp-header">
-              <h3>The Huntington News</h3>
-              <span>Boston, MA</span>
-            </div>
-            <div className="exp-subheader">
-              <p>Photography Staff</p>
-              <span>December 2024 – Present</span>
-            </div>
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Intern</h3>
+              <p className="resume-role-meta">Billboard Media Group · San Juan, Puerto Rico</p>
+              <p className="resume-role-dates">2018 – Present</p>
+            </header>
+            <p className="resume-role-intro">BMG is my mother's outdoor advertising company, a relatively small fish in the overall outdoor media market.</p>
             <ul>
-              <li>• Contributed to a student-run newspaper, providing on-call photography support for headshots, news stories, and editorials</li>
-              <li>• Captured images for school-related sports games, events, and student-affiliated activities, while also contributing to stories in the Lifestyles, Sports, and City section of the paper</li>
+              <li>Was first introduced to graphic design through my mother, who taught me everything she knew during my free time.</li>
+              <li>Started out working weekends on installations, helping put up smaller banners and display tarps for clients.</li>
+              <li>Helped wherever I could over the years, often handling different parts of the business.</li>
+              <li>Combined my drone piloting skills and love for photography to capture high-quality aerial shots of clients' advertisements, a service I've also provided for other outdoor media companies.</li>
             </ul>
-          </div>
+          </article>
 
-          <div className="experience-item">
-            <div className="exp-header">
-              <h3>PAROMA Sailing Team</h3>
-              <span>San Juan, PR</span>
-            </div>
-            <div className="exp-subheader">
-              <p>Bowman</p>
-              <span>August 2019 - Present</span>
-            </div>
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Photography Staff & Writer</h3>
+              <p className="resume-role-meta">The Huntington News · Boston</p>
+              <p className="resume-role-dates">December 2024 – Present</p>
+            </header>
+            <p className="resume-role-intro">The Huntington News is Northeastern University's independent, student-run newspaper.</p>
             <ul>
-              <li>• Full-time crew member on the PAROMA vessel, participating in multiple regattas, including the BVI and USVI Spring International Regatta </li>
-              <li>• Proficient in handling smaller vessels such as Optimist, Laser, 420, 470, and Hobie 16</li>
+              <li>Photograph sports games, campus events, and student activities, with my images published in six articles to date.</li>
+              <li>Write and contribute to stories across the Lifestyle, Sports, and City sections, including published articles under my own byline.</li>
+              <li>Work on both sides of the story, as a photographer capturing the moment and as a writer shaping how it's told.</li>
             </ul>
-          </div>
+          </article>
 
-          <div className="experience-item">
-            <div className="exp-header">
-              <h3>Sidex Suministros</h3>
-              <span>Murcia, ES</span>
-            </div>
-            <div className="exp-subheader">
-              <p>Industrial Design Internship</p>
-              <span>May 2019 - July 2023</span>
-            </div>
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Chief Marketing Officer</h3>
+              <p className="resume-role-meta">Growth Rocket LLC · Boston</p>
+              <p className="resume-role-dates">June – December 2024</p>
+            </header>
+            <p className="resume-role-intro">Growth Rocket is a friend's startup built around guerrilla-style marketing, helping mom-and-pop shops across the Boston area build a stronger social media presence.</p>
             <ul>
-              <li>• Gained a comprehensive understanding of industrial design software and its applications in the work of an industrial engineer, using MTPro as the main designing software</li>
-              <li>• Learned advanced construction methods using extruded aluminum and was able to work in the shop putting together blueprints for clients while as well completing sales</li>
+              <li>Co-led a full revitalization of the company's marketing strategy, rethinking how it presented itself in order to accelerate growth.</li>
+              <li>Led client outreach, building and delivering pitches tailored to each prospective client's needs to expand the client base and open new business opportunities.</li>
             </ul>
-          </div>
+          </article>
 
-          <div className="experience-item">
-            <div className="exp-header">
-              <h3>La Luz Verde</h3>
-              <span>San Juan, PR</span>
-            </div>
-            <div className="exp-subheader">
-              <p>Author/Editor</p>
-              <span>August 2021 - May 2022</span>
-            </div>
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Industrial Design Intern</h3>
+              <p className="resume-role-meta">Sidex Suministros · Murcia, Spain</p>
+              <p className="resume-role-dates">May 2019 – July 2023</p>
+            </header>
+            <p className="resume-role-intro">Sidex Suministros is my father's industrial design company, specializing in extruded aluminum for all kinds of applications, and an official retailer of Bosch products.</p>
             <ul>
-              <li>• Co-founded the school's first all-Spanish newspaper in collaboration with the head of the Spanish department as well as authored and collaborated in numerous articles relating to school activities </li>
+              <li>Learned industrial design software in a real engineering setting, using MTPro as the primary design tool and seeing how designs translate into production.</li>
+              <li>Gained hands-on experience with advanced construction methods using extruded aluminum, working in the shop to assemble projects from client blueprints.</li>
+              <li>Supported the sales side of the business, seeing projects through from design to completed sale.</li>
             </ul>
-          </div>
-        </div>
+          </article>
 
-        <div className="resume-section">
-          <h2>Education</h2>
-          
-          <div className="education-item">
-            <div className="edu-header">
-              <h3>Northeastern University, D'Amore-McKim School of Business</h3>
-              <span>Boston, MA</span>
-            </div>
-            <div className="edu-subheader">
-              <p>Candidate for BS in Business Administration and Design</p>
-              <span>May 2027</span>
-            </div>
-            <p>Concentrations: Marketing & Finance</p>
-            <p>GPA: 3.3</p>
-            <p>Activities: Intramural Soccer, Club Squash, Northeastern Electric Racing, The Huntington News</p>
-            <p className="courses">Relevant Courses: Financial Accounting and Reporting; Macroeconomics; Interactive Design Principles; Business Statistics; Financial Management; Marketing Research</p>
-          </div>
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Bowman</h3>
+              <p className="resume-role-meta">PAROMA Sailing Team · San Juan, Puerto Rico</p>
+              <p className="resume-role-dates">August 2019 – Present</p>
+            </header>
+            <p className="resume-role-intro">PAROMA is an official sailing team in the Performance Cruiser class, racing aboard a Salona 44.</p>
+            <ul>
+              <li>Crew the bow of the PAROMA racing yacht, the position responsible for sail changes, spinnaker work, and calling the start line, where timing and communication with the rest of the crew are critical.</li>
+              <li>Have competed in multiple regattas, including the BVI and USVI Spring International Regattas.</li>
+              <li>Experienced across a range of smaller boats, including the Optimist, Laser, 420, 470, and Hobie 16.</li>
+            </ul>
+          </article>
 
-          <div className="education-item">
-            <div className="edu-header">
-              <h3>American University of Paris</h3>
-              <span>Paris, FR</span>
-            </div>
-            <div className="edu-subheader">
-              <p>Summer Study Abroad</p>
-              <span>July 2022 - August 2023</span>
-            </div>
-            <p className="courses">Courses: EU & its Discontents and Advanced Photography</p>
-          </div>
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Co-Founder, Author & Editor</h3>
+              <p className="resume-role-meta">La Luz Verde · San Juan, Puerto Rico</p>
+              <p className="resume-role-dates">August 2021 – May 2022</p>
+            </header>
+            <p className="resume-role-intro">La Luz Verde was an initiative with the Spanish department to bring an all-Spanish newspaper to an American school.</p>
+            <ul>
+              <li>Co-founded Saint John's School's first all-Spanish newspaper, working directly with the head of the Spanish department to launch it.</li>
+              <li>Wrote, edited, and collaborated on numerous articles covering school life and activities.</li>
+            </ul>
+          </article>
+        </section>
 
-          <div className="education-item">
-            <div className="edu-header">
+        <section className="resume-section" aria-labelledby="education-heading">
+          <h2 id="education-heading">Education</h2>
+
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Northeastern University</h3>
+              <p className="resume-role-meta">Boston, MA</p>
+              <p className="resume-role-dates">Expected May 2027</p>
+            </header>
+            <p className="resume-note">D'Amore-McKim School of Business & College of Arts, Media and Design</p>
+            <p className="resume-note">Bachelor of Business Administration and Design · Concentrations in Finance & Marketing · Minor in Law and Policy</p>
+            <p className="resume-note">Relevant coursework: Financial Accounting and Reporting, Financial Management, Investments, Profit Analysis and Managerial Accounting, Macroeconomics, Business Statistics, and Law and Policy.</p>
+            <p className="resume-note">Activities: Northeastern Electric Racing, The Huntington News, Case Institute, Club Squash, and Intramural Soccer.</p>
+          </article>
+
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>The American University of Paris</h3>
+              <p className="resume-role-meta">Paris, France</p>
+              <p className="resume-role-dates">July – August 2022</p>
+            </header>
+            <p className="resume-note">Non-degree summer coursework in Political Science and Government · Grade: A</p>
+            <ul>
+              <li>Completed two 4-credit university courses while still in high school: Europe and Its Discontents (LW2033), taught by Professor Kerstin Bree Carlson, and Photography (AR1061), taught by Professor Paul McCarthy.</li>
+              <li>Both courses offered a depth of learning I've rarely encountered, shaped by exceptional teaching and a genuinely engaged classroom environment.</li>
+            </ul>
+          </article>
+
+          <article className="resume-role">
+            <header className="resume-role-head">
               <h3>Saint John's School</h3>
-              <span>San Juan, PR</span>
-            </div>
-            <div className="edu-subheader">
-              <p>High School Diploma</p>
-              <span>June 2023</span>
-            </div>
-            <p>Awards & Activities: Saint John's School Honors 7-12th Grade Swimming team; <i>La Luz Verde</i> Newspaper</p>
+              <p className="resume-role-meta">San Juan, PR</p>
+              <p className="resume-role-dates">June 2023</p>
+            </header>
+            <p className="resume-note">Honor Roll · Varsity Swim Team (2018–2023) · AP Seminar and Research Certificate</p>
+          </article>
+        </section>
+
+        <section className="resume-section" aria-labelledby="skills-heading">
+          <h2 id="skills-heading">Skills</h2>
+          <div className="resume-card">
+          <div className="skill-group">
+            <h3>Photo & video</h3>
+            <p>Adobe Photoshop, Lightroom Classic, Premiere Pro, After Effects</p>
           </div>
-        </div>
+          <div className="skill-group">
+            <h3>Design & engineering</h3>
+            <p>Autodesk Fusion 360, SolidWorks, MTPro</p>
+          </div>
+          <div className="skill-group">
+            <h3>Business & marketing</h3>
+            <p>Microsoft Office, Google Workspace, Google Ads (certified in Measurement, AI-Powered Performance, and Creative)</p>
+          </div>
+          <div className="skill-group">
+            <h3>Languages</h3>
+            <p>English and Spanish, both native</p>
+          </div>
+          <div className="skill-group">
+            <h3>Other certifications</h3>
+            <p>Open Water Diver, Power Squadron</p>
+          </div>
+          </div>
+        </section>
+
+        <section className="resume-section" aria-labelledby="outside-heading">
+          <h2 id="outside-heading">Outside of Work</h2>
+          <div className="resume-card">
+            <p className="outside-copy">I'm into foiling, repairing analog cameras, 3D printing, contract law, Latin American history, and equity research & valuation.</p>
+          </div>
+        </section>
       </div>
     </div>
   );
 }
 
-export default Resume; 
+export default Resume;

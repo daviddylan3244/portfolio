@@ -34,10 +34,15 @@ function Store() {
         fontFamily: 'Special Elite, monospace'
       }}>
         <div style={{ 
-          fontSize: '2.5rem',
+          fontSize: 'clamp(1.5rem, 8vw, 2.5rem)',
           display: 'flex',
           alignItems: 'center',
-          gap: '4px'
+          justifyContent: 'center',
+          flexWrap: 'wrap',
+          gap: '4px',
+          maxWidth: '100%',
+          padding: '0 1rem',
+          textAlign: 'center'
         }}>
           <span>Coming Soon</span>
           <div style={{ display: 'inline-flex', marginLeft: '8px' }}>

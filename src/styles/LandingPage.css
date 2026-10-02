@@ -235,6 +235,29 @@
   }
 }
 
+@media (max-width: 768px) {
+  .logo-online-container {
+    min-height: 44px;
+  }
+
+  .nav-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-height: 520px) {
+  .reconstruction-notice {
+    top: auto;
+    bottom: 2.8rem;
+    max-width: calc(100% - 2rem);
+  }
+
+  .reconstruction-notice-sub {
+    top: auto;
+    bottom: 0.5rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .logo-text,
   .nav-button,

@@ -1,20 +1,33 @@
 .clothing-container {
     background-color: transparent;
-    min-height: 100vh;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
     color: white;
-    overflow-x: hidden;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.clothing-container .header-container {
+    position: relative;
+    z-index: 6;
+    flex: 0 0 auto;
 }
 
 .floating-streams {
     --stream-item-height: clamp(70px, 10vw, 120px);
     --stream-row-gap: calc(var(--stream-item-height) * 0.5);
-    --stream-open-ms: 720ms;
-    --stream-open-ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --stream-open-ms: 700ms;
+    --stream-open-ease: cubic-bezier(0.22, 1, 0.36, 1);
     position: relative;
     width: 100%;
     max-width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: hidden;
-    padding: 1.5rem 0 3rem;
+    padding: 0.75rem 0 1rem;
     box-sizing: border-box;
 }
 
@@ -24,9 +37,7 @@
     height: var(--stream-item-height);
     margin-bottom: var(--stream-row-gap);
     overflow: hidden;
-    transition:
-        transform var(--stream-open-ms) var(--stream-open-ease),
-        opacity var(--stream-open-ms) var(--stream-open-ease);
+    transform-origin: top center;
 }
 
 .floating-streams-row:last-child {
@@ -87,31 +98,31 @@
     pointer-events: none;
 }
 
-.stream-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 8;
-    background: transparent;
-    opacity: 0;
-    transition: opacity var(--stream-open-ms) var(--stream-open-ease);
+.floating-streams.is-viewer-open .floating-streams-row:first-child .stream-item,
+.floating-streams.is-viewer-open .floating-streams-row:last-child .stream-item {
+    cursor: pointer;
 }
 
-.stream-overlay.is-visible {
-    opacity: 1;
+.stream-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: transparent;
 }
 
 .stream-flyer {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
-    z-index: 10;
+    z-index: 40;
     box-sizing: border-box;
     padding: 0;
     border-radius: 0;
     background-color: #FFFFFF;
     box-shadow: none;
-    pointer-events: auto;
+    pointer-events: none;
     overflow: hidden;
+    transform-origin: 0 0;
 }
 
 .stream-flyer img {
@@ -124,11 +135,18 @@
     pointer-events: none;
 }
 
-.stream-close {
+.stream-flyer-large {
     position: absolute;
-    z-index: 12;
-    width: 40px;
-    height: 40px;
+    opacity: 0;
+}
+
+.stream-close {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 50;
+    width: 44px;
+    height: 44px;
     border: none;
     border-radius: 999px;
     background: rgba(20, 12, 8, 0.45);
@@ -138,7 +156,6 @@
     cursor: pointer;
     opacity: 0;
     pointer-events: none;
-    transition: opacity var(--stream-open-ms) var(--stream-open-ease);
 }
 
 .stream-close.is-visible {
@@ -161,6 +178,6 @@
     .stream-overlay,
     .stream-close,
     .stream-flyer {
-        transition-duration: 1ms;
+        transition: none;
     }
 }

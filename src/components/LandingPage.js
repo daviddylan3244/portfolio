@@ -4,6 +4,8 @@ import '../styles/LandingPage.css';
 
 const SCRAMBLE_CHARS = '!<>-_\\/[]{}=+*^?#$%&@ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
+const SITE_VERSION = 'v0.9.4';
+
 // Frames each character spends scrambling before it locks into place.
 const CHARS_PER_FRAME = 0.42;
 const MIN_SCRAMBLE_FRAMES = 13;
@@ -162,7 +164,7 @@ function LandingPage() {
           titleDecoded ? ' is-visible' : ''
         }`}
       >
-        **Initial Prototype Version**
+        {`**Initial Prototype Version · ${SITE_VERSION}**`}
       </p>
     </div>
   );
