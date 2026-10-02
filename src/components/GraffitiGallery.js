@@ -13,10 +13,21 @@ const IMAGE_URLS = [
     '/Product-design/WindowShelf2.png',
     '/Product-design/Goya-1.png',
     '/Product-design/Goya-2.png',
+    '/Product-design/Graphic-Design-34.jpg',
+    '/Product-design/Graphic-Design-35.jpg',
+    '/Product-design/Graphic-Design-36.jpg',
     '/Product-design/Shelf-Sidex.png',
     '/Product-design/shelfWheels-Sidex.png',
     '/Product-design/Box-Sidex.png',
 ];
+
+const GRAPHIC_START = 8;
+const GRAPHIC_COUNT = 3;
+const NATURAL_SIZE = {
+    8: { width: 2000, height: 1499 },
+    9: { width: 2000, height: 1333 },
+    10: { width: 2000, height: 1333 },
+};
 
 const GAP = 10;
 const MIN_SIZE = 90;
@@ -33,6 +44,15 @@ function bannerSize(index, maxWidth) {
     return { width, height: width * (naturalHeight / naturalWidth) };
 }
 
+function isGraphic(index) {
+    return index >= GRAPHIC_START && index < GRAPHIC_START + GRAPHIC_COUNT;
+}
+
+function graphicCardSize(index, cardWidth) {
+    const natural = NATURAL_SIZE[index];
+    return { width: cardWidth, height: cardWidth * (natural.height / natural.width) };
+}
+
 function buildDesktopLayout(viewportWidth) {
     const baseWidth = DESKTOP_BASE;
     const maxWidth = Math.max(MIN_SIZE, viewportWidth - 40);
@@ -42,7 +62,7 @@ function buildDesktopLayout(viewportWidth) {
     );
     const gridRowHeight = baseWidth * 0.75 + GAP;
 
-    return IMAGE_URLS.map((src, index) => {
+    const images = IMAGE_URLS.map((src, index) => {
         const isBanner = index === 6 || index === 7;
 
         if (isBanner) {
@@ -58,21 +78,57 @@ function buildDesktopLayout(viewportWidth) {
             };
         }
 
-        const gridIndex = index < 6 ? index : index - 8;
-        const column = index < 6 ? gridIndex % 3 : gridIndex;
-        const row = index < 6 ? Math.floor(gridIndex / 3) : 0;
-        const bannerBlock = index < 6 ? 0 : gridRowHeight * 2 + 700;
+        if (index < 6) {
+            const column = index % 3;
+            const row = Math.floor(index / 3);
+            return {
+                id: index,
+                src,
+                width: baseWidth,
+                height: baseWidth * 0.75,
+                x: gridStartX + column * (baseWidth + GAP),
+                y: 80 + row * gridRowHeight,
+                zIndex: 1,
+            };
+        }
 
-        return {
+        return null;
+    });
+
+    const secondBanner = images[7];
+    const graphicY = secondBanner.y + secondBanner.height + GAP;
+    let graphicRowHeight = 0;
+
+    for (let offset = 0; offset < GRAPHIC_COUNT; offset += 1) {
+        const index = GRAPHIC_START + offset;
+        const { width, height } = graphicCardSize(index, baseWidth);
+        graphicRowHeight = Math.max(graphicRowHeight, height);
+        images[index] = {
             id: index,
-            src,
+            src: IMAGE_URLS[index],
+            width,
+            height,
+            x: gridStartX + offset * (baseWidth + GAP),
+            y: graphicY,
+            zIndex: 1,
+        };
+    }
+
+    const lowerY = graphicY + graphicRowHeight + GAP;
+    for (let index = GRAPHIC_START + GRAPHIC_COUNT; index < IMAGE_URLS.length; index += 1) {
+        const column = index - (GRAPHIC_START + GRAPHIC_COUNT);
+        images[index] = {
+            id: index,
+            src: IMAGE_URLS[index],
             width: baseWidth,
             height: baseWidth * 0.75,
             x: gridStartX + column * (baseWidth + GAP),
-            y: 80 + bannerBlock + row * gridRowHeight,
+            y: lowerY,
             zIndex: 1,
         };
-    });
+    }
+
+    return images;
 }
 
 function buildFittingLayout(viewportWidth) {
@@ -112,7 +168,9 @@ function buildFittingLayout(viewportWidth) {
         }
 
         const width = Math.min(baseWidth, maxWidth);
-        const height = width * 0.75;
+        const height = isGraphic(index)
+            ? graphicCardSize(index, width).height
+            : width * 0.75;
         images.push({
             id: index,
             src,
@@ -124,7 +182,7 @@ function buildFittingLayout(viewportWidth) {
         });
         rowHeight = Math.max(rowHeight, height + GAP);
         col += 1;
-        if (col >= columns) {
+        if (col >= columns || index === GRAPHIC_START + GRAPHIC_COUNT - 1) {
             y += rowHeight;
             col = 0;
             rowHeight = 0;
