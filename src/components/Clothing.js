@@ -20,9 +20,13 @@ const VERTICAL_GAP_RATIO = 0.5; // gap between rows, as a fraction of item heigh
 // 1-based. Row 3 is the middle of 5 rows.
 const INTRO_FIRST_ROW = 3;
 const INTRO_ROW_DELAYS_SECONDS = [2, 7, 11, 14, 16];
+const INTRO_PLAY_ONCE_PER_VISIT = true;
+const INTRO_STORAGE_KEY = 'clothing-intro-played';
 
-// Survives in-app navigation, but resets on a full page refresh.
+// Used only if sessionStorage is unavailable.
 let introPlayedThisVisit = false;
+
+const MAX_FRAME_SECONDS = 1 / 30;
 
 // Future: each item's speed = baseSpeed * (1 ± this). 0.25 => about ±25%.
 const SPEED_VARIATION = 0;
@@ -56,42 +60,19 @@ const LARGE_FADE_SECONDS = 0.18;
 
 // ---------------------------------------------------------------------------
 // Item library — web-sized photos. src = rows, srcFull = enlarged view.
+// Raise PHOTO_COUNT when a new batch is added. Files are photo-1 through photo-N.
 // ---------------------------------------------------------------------------
-const STREAM_LIBRARY = [
-    { id: 'photo-1', src: '/photos/Website digital/Photography/small/small-photo-1.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-1.jpg' },
-    { id: 'photo-2', src: '/photos/Website digital/Photography/small/small-photo-2.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-2.jpg' },
-    { id: 'photo-3', src: '/photos/Website digital/Photography/small/small-photo-3.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-3.jpg' },
-    { id: 'photo-4', src: '/photos/Website digital/Photography/small/small-photo-4.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-4.jpg' },
-    { id: 'photo-5', src: '/photos/Website digital/Photography/small/small-photo-5.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-5.jpg' },
-    { id: 'photo-6', src: '/photos/Website digital/Photography/small/small-photo-6.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-6.jpg' },
-    { id: 'photo-7', src: '/photos/Website digital/Photography/small/small-photo-7.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-7.jpg' },
-    { id: 'photo-8', src: '/photos/Website digital/Photography/small/small-photo-8.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-8.jpg' },
-    { id: 'photo-9', src: '/photos/Website digital/Photography/small/small-photo-9.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-9.jpg' },
-    { id: 'photo-10', src: '/photos/Website digital/Photography/small/small-photo-10.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-10.jpg' },
-    { id: 'photo-11', src: '/photos/Website digital/Photography/small/small-photo-11.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-11.jpg' },
-    { id: 'photo-12', src: '/photos/Website digital/Photography/small/small-photo-12.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-12.jpg' },
-    { id: 'photo-13', src: '/photos/Website digital/Photography/small/small-photo-13.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-13.jpg' },
-    { id: 'photo-14', src: '/photos/Website digital/Photography/small/small-photo-14.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-14.jpg' },
-    { id: 'photo-15', src: '/photos/Website digital/Photography/small/small-photo-15.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-15.jpg' },
-    { id: 'photo-16', src: '/photos/Website digital/Photography/small/small-photo-16.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-16.jpg' },
-    { id: 'photo-17', src: '/photos/Website digital/Photography/small/small-photo-17.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-17.jpg' },
-    { id: 'photo-18', src: '/photos/Website digital/Photography/small/small-photo-18.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-18.jpg' },
-    { id: 'photo-19', src: '/photos/Website digital/Photography/small/small-photo-19.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-19.jpg' },
-    { id: 'photo-20', src: '/photos/Website digital/Photography/small/small-photo-20.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-20.jpg' },
-    { id: 'photo-21', src: '/photos/Website digital/Photography/small/small-photo-21.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-21.jpg' },
-    { id: 'photo-22', src: '/photos/Website digital/Photography/small/small-photo-22.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-22.jpg' },
-    { id: 'photo-23', src: '/photos/Website digital/Photography/small/small-photo-23.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-23.jpg' },
-    { id: 'photo-24', src: '/photos/Website digital/Photography/small/small-photo-24.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-24.jpg' },
-    { id: 'photo-25', src: '/photos/Website digital/Photography/small/small-photo-25.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-25.jpg' },
-    { id: 'photo-26', src: '/photos/Website digital/Photography/small/small-photo-26.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-26.jpg' },
-    { id: 'photo-27', src: '/photos/Website digital/Photography/small/small-photo-27.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-27.jpg' },
-    { id: 'photo-28', src: '/photos/Website digital/Photography/small/small-photo-28.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-28.jpg' },
-    { id: 'photo-29', src: '/photos/Website digital/Photography/small/small-photo-29.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-29.jpg' },
-    { id: 'photo-30', src: '/photos/Website digital/Photography/small/small-photo-30.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-30.jpg' },
-    { id: 'photo-31', src: '/photos/Website digital/Photography/small/small-photo-31.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-31.jpg' },
-    { id: 'photo-32', src: '/photos/Website digital/Photography/small/small-photo-32.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-32.jpg' },
-    { id: 'photo-33', src: '/photos/Website digital/Photography/small/small-photo-33.jpg', srcFull: '/photos/Website digital/Photography/Large/Large-photo-33.jpg' },
-];
+const PHOTO_COUNT = 113;
+const PHOTO_DIR = '/photos/Website digital/Photography';
+const EXCLUDED_PHOTOS = [50];
+
+const STREAM_LIBRARY = Array.from({ length: PHOTO_COUNT }, (_, index) => index + 1)
+    .filter((number) => !EXCLUDED_PHOTOS.includes(number))
+    .map((number) => ({
+        id: `photo-${number}`,
+        src: `${PHOTO_DIR}/small/small-photo-${number}.jpg`,
+        srcFull: `${PHOTO_DIR}/Large/Large-photo-${number}.jpg`,
+    }));
 
 function clampItemHeight(viewportWidth, availableHeight) {
     const preferred = (ITEM_HEIGHT_VW / 100) * viewportWidth;
@@ -172,6 +153,34 @@ function shuffle(list) {
     return copy;
 }
 
+function hasPlayedIntro() {
+    if (!INTRO_PLAY_ONCE_PER_VISIT) return false;
+    try {
+        return sessionStorage.getItem(INTRO_STORAGE_KEY) === '1';
+    } catch (err) {
+        return introPlayedThisVisit;
+    }
+}
+
+function markIntroPlayed() {
+    introPlayedThisVisit = true;
+    if (!INTRO_PLAY_ONCE_PER_VISIT) return;
+    try {
+        sessionStorage.setItem(INTRO_STORAGE_KEY, '1');
+    } catch (err) {
+        // Private browsing can block sessionStorage. The memory flag still covers this tab.
+    }
+}
+
+function decodeElements(root) {
+    const images = [...root.querySelectorAll('img')];
+    return Promise.all(
+        images.map((img) =>
+            typeof img.decode === 'function' ? img.decode().catch(() => {}) : Promise.resolve()
+        )
+    );
+}
+
 function decodeSmallImage(item) {
     if (!item.src) {
         return Promise.resolve({ ...item, aspectRatio: item.aspectRatio || 1 });
@@ -237,7 +246,9 @@ function Clothing() {
         const decodedSpecs = new Map();
         const introTimers = [];
         const startedRows = new Set();
-        let libraryCursor = 0;
+        let deck = shuffle(STREAM_LIBRARY);
+        let deckCursor = 0;
+        const reserved = new Set();
         let rafId = 0;
         let running = false;
         let inView = true;
@@ -370,17 +381,79 @@ function Clothing() {
             return decodePromises.get(key);
         };
 
-        const nextRawItem = () => {
-            const item = STREAM_LIBRARY[libraryCursor % STREAM_LIBRARY.length];
-            libraryCursor += 1;
-            return item;
+        const photoKey = (item) => (item && (item.src || item.id)) || '';
+
+        const photosPerRow = () => {
+            const wanted = computePerRow();
+            const maxEven = Math.max(1, Math.floor(STREAM_LIBRARY.length / ROW_COUNT));
+            return Math.min(wanted, maxEven);
+        };
+
+        const occupiedKeys = (exceptSlot) => {
+            const keys = new Set();
+            pool.forEach((slot) => {
+                if (slot === exceptSlot || !slot.spec) return;
+                keys.add(photoKey(slot.spec));
+            });
+            if (viewer?.shownKey) keys.add(viewer.shownKey);
+            if (viewer?.departures) {
+                viewer.departures.forEach((dep) => {
+                    if (dep.shownKey) keys.add(dep.shownKey);
+                });
+            }
+            reserved.forEach((key) => keys.add(key));
+            return keys;
+        };
+
+        const refillDeck = () => {
+            deck = shuffle(STREAM_LIBRARY);
+            deckCursor = 0;
+        };
+
+        const nextRawItem = (exceptSlot) => {
+            const occupied = occupiedKeys(exceptSlot);
+            if (exceptSlot?.spec) occupied.add(photoKey(exceptSlot.spec));
+            for (let pass = 0; pass < 2; pass += 1) {
+                while (deckCursor < deck.length) {
+                    const item = deck[deckCursor];
+                    deckCursor += 1;
+                    const key = photoKey(item);
+                    if (!key || occupied.has(key)) continue;
+                    reserved.add(key);
+                    return item;
+                }
+                if (pass === 0) refillDeck();
+            }
+            return null;
+        };
+
+        const peekUpcoming = (count) => {
+            const occupied = occupiedKeys(null);
+            const upcoming = [];
+            let index = deckCursor;
+            while (index < deck.length && upcoming.length < count) {
+                const item = deck[index];
+                index += 1;
+                const key = photoKey(item);
+                if (!key || occupied.has(key)) continue;
+                occupied.add(key);
+                upcoming.push(item);
+            }
+            return upcoming;
+        };
+
+        const releaseReserved = (spec) => {
+            const key = photoKey(spec);
+            if (key) reserved.delete(key);
         };
 
         const takeDecodedSpecs = async (count) => {
             const specs = [];
             for (let i = 0; i < count; i += 1) {
                 if (cancelled) return specs;
-                specs.push(await decodeSmall(nextRawItem()));
+                const raw = nextRawItem();
+                if (!raw) break;
+                specs.push(await decodeSmall(raw));
             }
             return specs;
         };
@@ -454,18 +527,33 @@ function Clothing() {
         };
 
         const recycle = (slot) => {
-            const neighbor = leftmostInRow(slot.row, slot);
-            const raw = nextRawItem();
-            const spec = decodedSpecs.get(raw.src || raw.id) || {
-                ...raw,
-                aspectRatio: avgAspect(),
+            if (slot.frozen) return;
+            const raw = nextRawItem(slot);
+            if (!raw) {
+                const index = pool.indexOf(slot);
+                if (index >= 0) pool.splice(index, 1);
+                slot.el.remove();
+                return;
+            }
+            const place = (spec) => {
+                if (cancelled || !slot.el.isConnected) return;
+                const neighbor = leftmostInRow(slot.row, slot);
+                applyVisuals(slot, spec);
+                releaseReserved(spec);
+                slot.frozen = false;
+                slot.x = neighbor
+                    ? neighbor.x - slot.width - ITEM_GAP_PX
+                    : -slot.width;
+                paint(slot);
             };
-            applyVisuals(slot, spec);
-            slot.x = neighbor
-                ? neighbor.x - slot.width - ITEM_GAP_PX
-                : -slot.width;
-            paint(slot);
-            decodeSmall(raw);
+            const cached = decodedSpecs.get(raw.src || raw.id);
+            if (cached) {
+                place(cached);
+            } else {
+                slot.frozen = true;
+                decodeSmall(raw).then(place);
+            }
+            scheduleUpcoming();
         };
 
         const warmLarge = (spec) => {
@@ -492,8 +580,22 @@ function Clothing() {
             return largePromises.get(key);
         };
 
-        const prefetchLargeVersions = () => {
-            STREAM_LIBRARY.forEach((item) => warmLarge(item));
+        const ensureUpcomingSmalls = () => {
+            mapWithConcurrency(peekUpcoming(photosPerRow()), DECODE_CONCURRENCY, decodeSmall);
+        };
+
+        const prefetchUpcomingLarge = () => {
+            mapWithConcurrency(peekUpcoming(6), DECODE_CONCURRENCY, warmLarge);
+        };
+
+        let upcomingTask = null;
+        const scheduleUpcoming = () => {
+            if (upcomingTask) return;
+            upcomingTask = Promise.all([ensureUpcomingSmalls(), prefetchUpcomingLarge()]).finally(
+                () => {
+                    upcomingTask = null;
+                }
+            );
         };
 
         const applyRows = (amount) => {
@@ -761,8 +863,11 @@ function Clothing() {
 
             if (!viewer) return;
             if (viewer.largeReady) {
-                viewer.largeOpacity = Math.min(1, viewer.largeOpacity + dt / LARGE_FADE_SECONDS);
-                activeFlyer.large.style.opacity = String(viewer.largeOpacity);
+                if (!viewer.largeFadeStart) viewer.largeFadeStart = now;
+                const fadeMs = LARGE_FADE_SECONDS * 1000;
+                const amount = easeOpen(Math.min(1, (now - viewer.largeFadeStart) / fadeMs));
+                viewer.largeOpacity = amount;
+                activeFlyer.large.style.opacity = String(amount);
             }
             closeBtn.style.opacity = String(viewer.rowAmount);
             closeBtn.style.pointerEvents = viewer.rowAmount > 0.08 && !viewer.closeDone ? 'auto' : 'none';
@@ -796,6 +901,7 @@ function Clothing() {
             activeFlyer = homeFlyer;
             viewer = {
                 slot,
+                shownKey: photoKey(slot.spec),
                 phase: 'opening',
                 t0: now,
                 duration: transitionMs,
@@ -815,6 +921,7 @@ function Clothing() {
                 departures: [],
                 largeReady: false,
                 largeOpacity: 0,
+                largeFadeStart: 0,
             };
 
             configureFlyer(activeFlyer, layout, slot);
@@ -866,6 +973,7 @@ function Clothing() {
             activeFlyer.root.style.willChange = 'transform';
             viewer.departures.push({
                 slot: viewer.slot,
+                shownKey: viewer.shownKey,
                 flyer: activeFlyer,
                 layout: viewer.layout,
                 from: viewer.pose,
@@ -878,6 +986,7 @@ function Clothing() {
             document.body.append(node.root);
 
             viewer.slot = slot;
+            viewer.shownKey = photoKey(slot.spec);
             viewer.phase = 'switching';
             viewer.t0 = now;
             viewer.from = from;
@@ -887,6 +996,7 @@ function Clothing() {
             viewer.thumbOpacity = 0;
             viewer.largeOpacity = Number(node.large.style.opacity) || 0;
             viewer.largeReady = node.large.naturalWidth > 0 || viewer.largeOpacity > 0;
+            viewer.largeFadeStart = viewer.largeReady ? now - LARGE_FADE_SECONDS * 1000 * viewer.largeOpacity : 0;
             placeOverlay(from, layout);
             node.root.hidden = false;
             if (!viewer.largeReady) armLarge(node, slot);
@@ -948,7 +1058,6 @@ function Clothing() {
             hoverVisible = false;
             hoverRing.style.opacity = '0';
             startedRows.clear();
-            libraryCursor = 0;
             rows.forEach((rowEl) => rowEl.replaceChildren());
         };
 
@@ -986,6 +1095,7 @@ function Clothing() {
                     edge = slot.x - ITEM_GAP_PX;
                     paint(slot);
                     pool.push(slot);
+                    releaseReserved(slot.spec);
                 });
                 return;
             }
@@ -998,34 +1108,73 @@ function Clothing() {
                 cursorX += slot.width + ITEM_GAP_PX;
                 paint(slot);
                 pool.push(slot);
+                releaseReserved(slot.spec);
             });
         };
 
         const startRow = async (rowIndex, mode) => {
             if (cancelled || startedRows.has(rowIndex)) return;
-            const specs = await takeDecodedSpecs(computePerRow());
-            if (cancelled || startedRows.has(rowIndex) || !specs.length) return;
+            const specs = await takeDecodedSpecs(photosPerRow());
+            if (cancelled || startedRows.has(rowIndex) || !specs.length) {
+                specs.forEach(releaseReserved);
+                return;
+            }
             startedRows.add(rowIndex);
             populateRow(rowIndex, specs, mode);
+            await decodeElements(rows[rowIndex]);
+            if (cancelled) return;
+            scheduleUpcoming();
+            refreshRowBoxes();
             syncPlayback();
         };
 
         const fillAllRows = async (mode) => {
-            clearRows();
             applyLayoutMetrics();
-            const perRow = computePerRow();
+            const perRow = photosPerRow();
+            const batches = [];
             for (let rowIndex = 0; rowIndex < ROW_COUNT; rowIndex += 1) {
                 if (cancelled) return;
                 const specs = await takeDecodedSpecs(perRow);
                 if (cancelled) return;
+                batches.push(specs);
+            }
+            if (cancelled) return;
+            clearRows();
+            applyLayoutMetrics();
+            batches.forEach((specs, rowIndex) => {
+                if (!specs.length) return;
                 startedRows.add(rowIndex);
                 populateRow(rowIndex, specs, mode);
-            }
+            });
+            await decodeElements(section);
+            if (cancelled) return;
+            scheduleUpcoming();
+            refreshRowBoxes();
             syncPlayback();
         };
 
-        const slotRect = (slot, rowRects) => {
-            const base = rowRects[slot.row];
+        const outlinePx = (slot, rowRects) => {
+            const border = viewerBorderPx();
+            const innerWidth = layoutViewer(slot, rowRects).inner.width;
+            if (!(innerWidth > 0) || !(slot.width > 0)) return 0;
+            return (border / innerWidth) * slot.width;
+        };
+
+        let rowBoxes = null;
+        const refreshRowBoxes = () => {
+            rowBoxes = rows.map((row) => {
+                const rect = row.getBoundingClientRect();
+                return {
+                    left: rect.left,
+                    top: rect.top,
+                    width: rect.width,
+                    height: rect.height,
+                };
+            });
+        };
+
+        const slotScreenRect = (slot) => {
+            const base = rowBoxes[slot.row];
             const pose = rowPose[slot.row];
             const scale = pose.scale || 1;
             const originX = base.left + base.width / 2;
@@ -1037,39 +1186,29 @@ function Clothing() {
             };
         };
 
-        const outlinePx = (slot, rowRects) => {
-            const border = viewerBorderPx();
-            const innerWidth = layoutViewer(slot, rowRects).inner.width;
-            if (!(innerWidth > 0) || !(slot.width > 0)) return 0;
-            return (border / innerWidth) * slot.width;
-        };
-
-        const slotUnderPointer = (rowRects) => {
-            for (let i = 0; i < pool.length; i += 1) {
+        const slotUnderPointer = () => {
+            if (!rowBoxes) return null;
+            for (let i = pool.length - 1; i >= 0; i -= 1) {
                 const slot = pool[i];
-                if (!slot.spec) continue;
+                if (!slot.spec || slot.frozen) continue;
                 if (slot.el.style.pointerEvents === 'none') continue;
                 if (Number(slot.el.style.opacity) === 0) continue;
                 if (viewer && (!isFramingRow(slot.row) || slot === viewer.slot)) continue;
-                const rect = slotRect(slot, rowRects);
+                const rect = slotScreenRect(slot);
                 if (
                     pointerX >= rect.left &&
                     pointerX < rect.left + rect.width &&
                     pointerY >= rect.top &&
                     pointerY < rect.top + rect.height
                 ) {
-                    const hit = document.elementFromPoint(pointerX, pointerY);
-                    if (!hit || !hit.closest || hit.closest('.stream-item') !== slot.el) {
-                        return null;
-                    }
                     return slot;
                 }
             }
             return null;
         };
 
-        const placeHoverRing = (slot, rowRects) => {
-            const rect = slotRect(slot, rowRects);
+        const placeHoverRing = (slot) => {
+            const rect = slotScreenRect(slot);
             hoverRing.style.width = `${rect.width}px`;
             hoverRing.style.height = `${rect.height}px`;
             hoverRing.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
@@ -1077,22 +1216,22 @@ function Clothing() {
 
         const syncHover = () => {
             if (!fineHover || (!pointerInside && !hoverSlot)) return;
-            const rowRects = rows.map((row) => row.getBoundingClientRect());
-            const slot = pointerInside ? slotUnderPointer(rowRects) : null;
+            if (viewer || !rowBoxes) refreshRowBoxes();
+            const slot = pointerInside ? slotUnderPointer() : null;
             if (slot) {
                 if (slot !== hoverSlot) {
                     hoverSlot = slot;
-                    hoverRing.style.outlineWidth = `${outlinePx(slot, rowRects)}px`;
+                    hoverRing.style.outlineWidth = `${outlinePx(slot, rowBoxes)}px`;
                 }
                 hoverVisible = true;
                 hoverRing.style.opacity = '1';
-                placeHoverRing(slot, rowRects);
+                placeHoverRing(slot);
                 return;
             }
             if (!hoverSlot) return;
             hoverVisible = false;
             hoverRing.style.opacity = '0';
-            placeHoverRing(hoverSlot, rowRects);
+            if (rowBoxes) placeHoverRing(hoverSlot);
         };
 
         const onHoverPointerMove = (event) => {
@@ -1123,7 +1262,7 @@ function Clothing() {
 
         const tick = (now) => {
             if (!running) return;
-            const dt = lastTime ? Math.min(0.05, (now - lastTime) / 1000) : 0;
+            const dt = lastTime ? Math.min(MAX_FRAME_SECONDS, (now - lastTime) / 1000) : 0;
             lastTime = now;
 
             const motionScale = reducedMotion ? REDUCED_MOTION_SPEED_SCALE : 1;
@@ -1178,16 +1317,7 @@ function Clothing() {
         };
 
         const preloadFirstRowSmalls = () => {
-            const count = computePerRow();
-            const needed = [];
-            for (let i = 0; i < count; i += 1) {
-                needed.push(STREAM_LIBRARY[i % STREAM_LIBRARY.length]);
-            }
-            needed.forEach(decodeSmall);
-        };
-
-        const preloadRemainingSmalls = () => {
-            mapWithConcurrency(STREAM_LIBRARY, DECODE_CONCURRENCY, decodeSmall);
+            peekUpcoming(photosPerRow()).forEach(decodeSmall);
         };
 
         overlay.addEventListener('click', closeViewer);
@@ -1202,7 +1332,7 @@ function Clothing() {
 
         applyLayoutMetrics();
 
-        const playIntro = !reducedMotion && !introPlayedThisVisit;
+        const playIntro = !reducedMotion && !hasPlayedIntro();
 
         if (playIntro) {
             preloadFirstRowSmalls();
@@ -1219,23 +1349,18 @@ function Clothing() {
                 if (rowIndex === undefined) return;
                 const timer = window.setTimeout(() => {
                     if (cancelled) return;
-                    if (index === 0) {
-                        introPlayedThisVisit = true;
-                        preloadRemainingSmalls();
-                        prefetchLargeVersions();
-                    }
+                    if (index === 0) markIntroPlayed();
                     startRow(rowIndex, 'enter-left');
                 }, seconds * 1000);
                 introTimers.push(timer);
             });
         } else {
-            mapWithConcurrency(STREAM_LIBRARY, DECODE_CONCURRENCY, decodeSmall).then(
-                async () => {
-                    if (cancelled) return;
-                    await fillAllRows('filled');
-                    if (!cancelled) prefetchLargeVersions();
-                }
-            );
+            section.style.visibility = 'hidden';
+            fillAllRows('filled').then(() => {
+                if (cancelled) return;
+                section.style.visibility = '';
+                syncPlayback();
+            });
         }
 
         const intersection = new IntersectionObserver(
@@ -1259,7 +1384,6 @@ function Clothing() {
                 pause();
                 fillAllRows('filled').then(() => {
                     if (cancelled) return;
-                    prefetchLargeVersions();
                     if (wasRunning) syncPlayback();
                 });
             }, 150);
