@@ -6,8 +6,8 @@ import '../styles/Clothing.css';
 // ---------------------------------------------------------------------------
 // Tuning
 // ---------------------------------------------------------------------------
-const ROW_COUNT = 5;
 const CROSSING_TIME_SECONDS = 14;
+const ROW_BUFFER = 1;
 
 // clamp(ITEM_HEIGHT_MIN_PX, ITEM_HEIGHT_VW * 1vw, ITEM_HEIGHT_MAX_PX)
 const ITEM_HEIGHT_MIN_PX = 70;
@@ -17,9 +17,13 @@ const ITEM_HEIGHT_MAX_PX = 120;
 const ITEM_GAP_PX = 40;
 const VERTICAL_GAP_RATIO = 0.5; // gap between rows, as a fraction of item height
 
-// 1-based. Row 3 is the middle of 5 rows.
-const INTRO_FIRST_ROW = 3;
-const INTRO_ROW_DELAYS_SECONDS = [2, 7, 11, 14, 16];
+// First row (the middle one on screen) starts after this delay.
+const INTRO_FIRST_DELAY_SECONDS = 1.0;
+// Random wait between row starts. Never shorter than the minimum.
+const INTRO_MIN_GAP_SECONDS = 0.3;
+const INTRO_MAX_GAP_SECONDS = 2.0;
+// The last on-screen row aims to start at this time.
+const INTRO_TARGET_SECONDS = 7.0;
 const INTRO_PLAY_ONCE_PER_VISIT = true;
 const INTRO_STORAGE_KEY = 'clothing-intro-played';
 
@@ -50,39 +54,115 @@ const DECODE_CONCURRENCY = 3;
 const OPEN_TRANSITION_MS = 700;
 const OPEN_EASE_POINTS = [0.22, 1, 0.36, 1];
 const OPEN_EASING = `cubic-bezier(${OPEN_EASE_POINTS.join(', ')})`;
-const ROW_SCALE_WHEN_OPEN = 1;
 const VIEWER_GAP_PX = 32;
 const VIEWER_BORDER_MIN_PX = 12;
 const VIEWER_BORDER_MAX_PX = 48;
 const CLOSE_BUTTON_GAP_PX = 10;
 const CLOSE_BUTTON_PX = 44;
-const LARGE_FADE_SECONDS = 0.18;
-
 // ---------------------------------------------------------------------------
 // Item library — web-sized photos. src = rows, srcFull = enlarged view.
 // Raise PHOTO_COUNT when a new batch is added. Files are photo-1 through photo-N.
 // ---------------------------------------------------------------------------
-const PHOTO_COUNT = 113;
+const PHOTO_COUNT = 147;
 const PHOTO_DIR = '/photos/Website digital/Photography';
-const EXCLUDED_PHOTOS = [50];
+// 47 and 50 are held out on purpose.
+// 114–121 have a small export in the Large folder.
+const EXCLUDED_PHOTOS = [47, 50, 114, 115, 116, 117, 118, 119, 120, 121];
 
 const STREAM_LIBRARY = Array.from({ length: PHOTO_COUNT }, (_, index) => index + 1)
     .filter((number) => !EXCLUDED_PHOTOS.includes(number))
     .map((number) => ({
+        number,
         id: `photo-${number}`,
         src: `${PHOTO_DIR}/small/small-photo-${number}.jpg`,
         srcFull: `${PHOTO_DIR}/Large/Large-photo-${number}.jpg`,
     }));
 
-function clampItemHeight(viewportWidth, availableHeight) {
-    const preferred = (ITEM_HEIGHT_VW / 100) * viewportWidth;
-    let height = Math.min(ITEM_HEIGHT_MAX_PX, Math.max(ITEM_HEIGHT_MIN_PX, preferred));
-    if (window.innerHeight < 700 && availableHeight > 0) {
-        const stride = ROW_COUNT + (ROW_COUNT - 1) * VERTICAL_GAP_RATIO;
-        const fit = Math.floor(availableHeight / stride);
-        if (fit > 0 && fit < height) height = fit;
+function photoNumberInPath(src) {
+    const match = String(src || '').match(/photo-(\d+)\.jpg$/i);
+    return match ? Number(match[1]) : null;
+}
+
+if (process.env.NODE_ENV !== 'production') {
+    STREAM_LIBRARY.forEach((item) => {
+        const smallNumber = photoNumberInPath(item.src);
+        const largeNumber = photoNumberInPath(item.srcFull);
+        if (item.number == null || smallNumber !== item.number || largeNumber !== item.number) {
+            console.error(
+                `Photo pairing error: number ${item.number}, small ${item.src}, large ${item.srcFull}`
+            );
+        }
+    });
+}
+
+function clampItemHeight(viewportWidth) {
+    if (viewportWidth <= MOBILE_BREAKPOINT_PX) {
+        const preferred = viewportWidth * 0.26;
+        return Math.min(ITEM_HEIGHT_MAX_PX, Math.max(96, preferred));
     }
-    return height;
+    const preferred = (ITEM_HEIGHT_VW / 100) * viewportWidth;
+    return Math.min(ITEM_HEIGHT_MAX_PX, Math.max(ITEM_HEIGHT_MIN_PX, preferred));
+}
+
+function introGaps(count, sum) {
+    if (count <= 0) return [];
+    const min = INTRO_MIN_GAP_SECONDS;
+    const max = INTRO_MAX_GAP_SECONDS;
+    const minSum = min * count;
+    const maxSum = max * count;
+    const target = Math.max(minSum, sum);
+    const ceiling = target > maxSum ? Math.max(max, (target / count) * 1.75) : max;
+    const weights = Array.from({ length: count }, () => 0.2 + Math.random());
+    const weightSum = weights.reduce((total, weight) => total + weight, 0);
+    let gaps = weights.map((weight) => min + (target - minSum) * (weight / weightSum));
+
+    for (let pass = 0; pass < 8; pass += 1) {
+        let overflow = 0;
+        gaps = gaps.map((gap) => {
+            if (gap > ceiling) {
+                overflow += gap - ceiling;
+                return ceiling;
+            }
+            if (gap < min) {
+                overflow -= min - gap;
+                return min;
+            }
+            return gap;
+        });
+        if (Math.abs(overflow) < 0.001) break;
+        const room = gaps.reduce((total, gap) => {
+            return total + (overflow > 0 ? ceiling - gap : gap - min);
+        }, 0);
+        if (room <= 0.001) break;
+        gaps = gaps.map((gap) => {
+            const space = overflow > 0 ? ceiling - gap : gap - min;
+            return gap + overflow * (space / room);
+        });
+    }
+
+    for (let index = 1; index < gaps.length; index += 1) {
+        if (Math.abs(gaps[index] - gaps[index - 1]) >= 0.02) continue;
+        const nudge = 0.02 + Math.random() * 0.08;
+        if (gaps[index] + nudge <= ceiling) gaps[index] += nudge;
+        else if (gaps[index] - nudge >= min) gaps[index] -= nudge;
+    }
+    return gaps;
+}
+
+function introStartTimes(rowIndexes) {
+    const count = rowIndexes.length;
+    if (!count) return [];
+    const middle = rowIndexes[Math.floor((count - 1) / 2)];
+    const rest = shuffle(rowIndexes.filter((index) => index !== middle));
+    const order = [middle, ...rest];
+    const span = Math.max(0, INTRO_TARGET_SECONDS - INTRO_FIRST_DELAY_SECONDS);
+    const gaps = introGaps(count - 1, span);
+    let time = INTRO_FIRST_DELAY_SECONDS;
+    return order.map((index, orderIndex) => {
+        const at = time;
+        if (orderIndex < gaps.length) time += gaps[orderIndex];
+        return { index, at };
+    });
 }
 
 function hash01(seed) {
@@ -129,6 +209,20 @@ function lerpPose(from, to, amount) {
         y: from.y + (to.y - from.y) * amount,
         scale: from.scale + (to.scale - from.scale) * amount,
     };
+}
+
+function urlsMatch(shown, src) {
+    if (!shown || !src) return false;
+    let shownPath = shown;
+    let specPath = src;
+    try {
+        shownPath = decodeURI(shown).split('?')[0];
+        specPath = decodeURI(src).split('?')[0];
+    } catch (err) {
+        shownPath = String(shown).split('?')[0];
+        specPath = String(src).split('?')[0];
+    }
+    return shownPath === specPath || shownPath.endsWith(specPath);
 }
 
 function fitInBox(aspectRatio, maxWidth, maxHeight) {
@@ -229,12 +323,12 @@ async function mapWithConcurrency(items, concurrency, fn) {
 function Clothing() {
     const navigate = useNavigate();
     const sectionRef = useRef(null);
-    const rowRefs = useRef([]);
 
     useEffect(() => {
         const section = sectionRef.current;
-        const rows = rowRefs.current.filter(Boolean);
-        if (!section || rows.length !== ROW_COUNT) return undefined;
+        if (!section) return undefined;
+        section.replaceChildren();
+        const rows = [];
 
         const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         const transitionMs = reducedMotion ? 1 : OPEN_TRANSITION_MS;
@@ -302,7 +396,7 @@ function Clothing() {
         const menuEl = section.parentElement
             ? section.parentElement.querySelector('.header-nav')
             : null;
-        const rowPose = rows.map(() => ({ ty: 0, scale: 1 }));
+        const rowPose = [];
         const fineHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
         let pointerX = 0;
         let pointerY = 0;
@@ -322,26 +416,86 @@ function Clothing() {
             return departing ? departing.thumbOpacity : null;
         };
 
-        const previousHtmlOverflow = document.documentElement.style.overflow;
-        const previousBodyOverflow = document.body.style.overflow;
-        document.documentElement.style.overflow = 'hidden';
-        document.body.style.overflow = 'hidden';
+        let scrollLockY = null;
+        const pageStartedAt = performance.now();
 
         const applyLayoutMetrics = () => {
-            viewportWidth = section.clientWidth;
-            const sectionStyle = getComputedStyle(section);
-            const sectionPad =
-                parseFloat(sectionStyle.paddingTop) + parseFloat(sectionStyle.paddingBottom);
-            itemHeight = clampItemHeight(
-                window.innerWidth,
-                section.clientHeight - sectionPad
-            );
+            viewportWidth = section.clientWidth || window.innerWidth;
+            itemHeight = clampItemHeight(window.innerWidth);
             baseSpeed = (viewportWidth + itemHeight) / CROSSING_TIME_SECONDS;
             section.style.setProperty('--stream-item-height', `${itemHeight}px`);
             section.style.setProperty(
                 '--stream-row-gap',
                 `${itemHeight * VERTICAL_GAP_RATIO}px`
             );
+        };
+
+        const stridePx = () => itemHeight * (1 + VERTICAL_GAP_RATIO);
+        const pageScroll = () =>
+            scrollLockY == null ? window.scrollY || window.pageYOffset || 0 : scrollLockY;
+        const viewHeight = () => {
+            const viewport = window.visualViewport;
+            if (viewport && viewport.height) return viewport.height;
+            return window.innerHeight;
+        };
+
+        const visibleBounds = () => {
+            const origin = section.offsetTop;
+            const viewTop = pageScroll();
+            const viewBottom = viewTop + viewHeight();
+            const stride = stridePx();
+            if (!(stride > 0)) return { first: 0, last: 0 };
+            let first = null;
+            let last = null;
+            const start = Math.max(0, Math.floor((viewTop - origin) / stride) - 1);
+            for (let index = start; index < start + 60; index += 1) {
+                const rowTop = origin + index * stride;
+                if (rowTop >= viewBottom) break;
+                if (rowTop + itemHeight > viewTop) {
+                    if (first == null) first = index;
+                    last = index;
+                }
+            }
+            if (first == null) {
+                const index = Math.max(0, Math.floor((viewTop - origin) / stride));
+                return { first: index, last: index };
+            }
+            return { first, last };
+        };
+
+        const pageIsZoomed = () => {
+            const viewport = window.visualViewport;
+            return !!(viewport && Math.abs(viewport.scale - 1) > 0.01);
+        };
+
+        const blockTouchScroll = (event) => {
+            event.preventDefault();
+        };
+
+        const lockScroll = () => {
+            if (scrollLockY != null) return;
+            scrollLockY = window.scrollY || window.pageYOffset || 0;
+            document.body.style.position = 'fixed';
+            document.body.style.top = `-${scrollLockY}px`;
+            document.body.style.left = '0';
+            document.body.style.right = '0';
+            document.body.style.width = '100%';
+            document.documentElement.style.overflow = 'hidden';
+            document.addEventListener('touchmove', blockTouchScroll, { passive: false });
+        };
+
+        const unlockScroll = () => {
+            document.removeEventListener('touchmove', blockTouchScroll);
+            if (scrollLockY == null) return;
+            const y = scrollLockY;
+            scrollLockY = null;
+            document.body.style.position = '';
+            document.body.style.top = '';
+            document.body.style.left = '';
+            document.body.style.right = '';
+            document.body.style.width = '';
+            document.documentElement.style.overflow = '';
+            window.scrollTo(0, y);
         };
 
         const avgAspect = () => {
@@ -384,8 +538,10 @@ function Clothing() {
         const photoKey = (item) => (item && (item.src || item.id)) || '';
 
         const photosPerRow = () => {
+            const { first, last } = visibleBounds();
+            const capacity = Math.max(1, last - first + 1 + ROW_BUFFER * 2);
             const wanted = computePerRow();
-            const maxEven = Math.max(1, Math.floor(STREAM_LIBRARY.length / ROW_COUNT));
+            const maxEven = Math.max(1, Math.floor(STREAM_LIBRARY.length / capacity));
             return Math.min(wanted, maxEven);
         };
 
@@ -445,17 +601,6 @@ function Clothing() {
         const releaseReserved = (spec) => {
             const key = photoKey(spec);
             if (key) reserved.delete(key);
-        };
-
-        const takeDecodedSpecs = async (count) => {
-            const specs = [];
-            for (let i = 0; i < count; i += 1) {
-                if (cancelled) return specs;
-                const raw = nextRawItem();
-                if (!raw) break;
-                specs.push(await decodeSmall(raw));
-            }
-            return specs;
         };
 
         const applyVisuals = (slot, spec) => {
@@ -526,8 +671,21 @@ function Clothing() {
             return leftmost;
         };
 
+        const slotIsHeld = (slot) =>
+            !!viewer &&
+            (viewer.slot === slot || viewer.departures.some((departure) => departure.slot === slot));
+
+        const displayedSpec = (slot) => {
+            const image = slot.el && slot.el.querySelector('img');
+            const shown = image && (image.currentSrc || image.src);
+            if (slot.spec && (!shown || urlsMatch(shown, slot.spec.src))) return slot.spec;
+            const libraryItem = STREAM_LIBRARY.find((item) => urlsMatch(shown, item.src));
+            if (!libraryItem) return slot.spec;
+            return decodedSpecs.get(libraryItem.src || libraryItem.id) || { ...libraryItem };
+        };
+
         const recycle = (slot) => {
-            if (slot.frozen) return;
+            if (slot.frozen || slotIsHeld(slot)) return;
             const raw = nextRawItem(slot);
             if (!raw) {
                 const index = pool.indexOf(slot);
@@ -537,6 +695,11 @@ function Clothing() {
             }
             const place = (spec) => {
                 if (cancelled || !slot.el.isConnected) return;
+                if (slotIsHeld(slot)) {
+                    releaseReserved(spec);
+                    slot.frozen = false;
+                    return;
+                }
                 const neighbor = leftmostInRow(slot.row, slot);
                 applyVisuals(slot, spec);
                 releaseReserved(spec);
@@ -553,7 +716,6 @@ function Clothing() {
                 slot.frozen = true;
                 decodeSmall(raw).then(place);
             }
-            scheduleUpcoming();
         };
 
         const warmLarge = (spec) => {
@@ -580,17 +742,28 @@ function Clothing() {
             return largePromises.get(key);
         };
 
+        let backgroundLarges = 0;
         const ensureUpcomingSmalls = () => {
-            mapWithConcurrency(peekUpcoming(photosPerRow()), DECODE_CONCURRENCY, decodeSmall);
+            const pending = peekUpcoming(photosPerRow()).filter((item) => {
+                const key = item.src || item.id;
+                return key && !decodedSpecs.has(key) && !decodePromises.has(key);
+            });
+            return mapWithConcurrency(pending, DECODE_CONCURRENCY, decodeSmall);
         };
 
         const prefetchUpcomingLarge = () => {
-            mapWithConcurrency(peekUpcoming(6), DECODE_CONCURRENCY, warmLarge);
+            const room = 6 - backgroundLarges;
+            if (room <= 0) return Promise.resolve();
+            const pending = peekUpcoming(room).filter((item) => item.srcFull && !largePromises.has(item.srcFull));
+            backgroundLarges += pending.length;
+            return mapWithConcurrency(pending, DECODE_CONCURRENCY, warmLarge);
         };
 
         let upcomingTask = null;
+        let prefetchedAhead = false;
         const scheduleUpcoming = () => {
-            if (upcomingTask) return;
+            if (prefetchedAhead || upcomingTask) return;
+            prefetchedAhead = true;
             upcomingTask = Promise.all([ensureUpcomingSmalls(), prefetchUpcomingLarge()]).finally(
                 () => {
                     upcomingTask = null;
@@ -599,15 +772,16 @@ function Clothing() {
         };
 
         const applyRows = (amount) => {
-            const targets = viewer ? viewer.rowTargets : null;
+            const frameTop = viewer ? viewer.frameTop : -1;
+            const frameBottom = viewer ? viewer.frameBottom : -1;
             rows.forEach((row, index) => {
-                const target = targets
-                    ? targets[index]
-                    : { ty: 0, scale: 1, opacity: 1 };
-                const ty = target.ty * amount;
-                const scale = 1 + (target.scale - 1) * amount;
-                const opacity = 1 + (target.opacity - 1) * amount;
-                const framing = index === 0 || index === ROW_COUNT - 1;
+                if (!row) return;
+                const framing = index === frameTop || index === frameBottom;
+                const between = index > frameTop && index < frameBottom;
+                const targetOpacity = viewer && between ? 0 : 1;
+                const ty = 0;
+                const scale = 1;
+                const opacity = 1 + (targetOpacity - 1) * amount;
                 const idle =
                     amount === 0 ||
                     (Math.abs(ty) < 0.01 && Math.abs(scale - 1) < 0.001);
@@ -646,31 +820,57 @@ function Clothing() {
             }
         };
 
-        const measureRows = () =>
-            rows.map((row) => {
+        const measureRows = () => {
+            const bases = [];
+            rows.forEach((row, index) => {
+                if (!row) return;
                 const rect = row.getBoundingClientRect();
-                return {
+                bases[index] = {
                     top: rect.top,
                     left: rect.left,
                     width: rect.width,
                     height: rect.height,
                 };
             });
+            return bases;
+        };
 
-        const layoutViewer = (slot, bases) => {
-            const topRow = bases[0];
-            const bottomRow = bases[bases.length - 1];
+        const layoutViewer = (spec, bases) => {
+            const topIndex = viewer ? viewer.frameTop : visibleBounds().first;
+            const bottomIndex = viewer ? viewer.frameBottom : visibleBounds().last;
+            const topRow = bases[topIndex] || bases.find(Boolean);
+            const bottomRow = bases[bottomIndex] || [...bases].reverse().find(Boolean);
+            if (!topRow || !bottomRow) {
+                const border = viewerBorderPx();
+                const maxTotalH = Math.max(80, viewHeight() - VIEWER_GAP_PX * 2);
+                const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
+                const inner = fitInBox(
+                    (spec && spec.aspectRatio) || 1,
+                    Math.max(40, maxTotalW - border * 2),
+                    Math.max(40, maxTotalH - border * 2)
+                );
+                const totalW = inner.width + border * 2;
+                const totalH = inner.height + border * 2;
+                return {
+                    border,
+                    inner,
+                    totalW,
+                    totalH,
+                    endLeft: (window.innerWidth - totalW) / 2,
+                    endTop: (viewHeight() - totalH) / 2,
+                };
+            }
             const border = viewerBorderPx();
             const gapTop = topRow.top + topRow.height + VIEWER_GAP_PX;
             const gapBottom = bottomRow.top - VIEWER_GAP_PX;
             const visibleTop = Math.max(gapTop, VIEWER_GAP_PX);
-            const visibleBottom = Math.min(gapBottom, window.innerHeight - VIEWER_GAP_PX);
+            const visibleBottom = Math.min(gapBottom, viewHeight() - VIEWER_GAP_PX);
             const betweenRows = visibleBottom - visibleTop;
-            const room = window.innerHeight - VIEWER_GAP_PX * 2;
+            const room = viewHeight() - VIEWER_GAP_PX * 2;
             const maxTotalH = Math.max(80, Math.min(room, betweenRows > 40 ? betweenRows : room));
             const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
             const inner = fitInBox(
-                slot.aspectRatio || 1,
+                (spec && spec.aspectRatio) || 1,
                 Math.max(40, maxTotalW - border * 2),
                 Math.max(40, maxTotalH - border * 2)
             );
@@ -680,7 +880,7 @@ function Clothing() {
             let endTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2;
             endTop = Math.max(
                 VIEWER_GAP_PX,
-                Math.min(endTop, window.innerHeight - totalH - VIEWER_GAP_PX)
+                Math.min(endTop, viewHeight() - totalH - VIEWER_GAP_PX)
             );
 
             return {
@@ -692,16 +892,6 @@ function Clothing() {
                 endTop,
             };
         };
-
-        const rowTargetsFor = (bases) =>
-            bases.map((_, index) => {
-                const framing = index === 0 || index === ROW_COUNT - 1;
-                return {
-                    ty: 0,
-                    scale: framing ? ROW_SCALE_WHEN_OPEN : 1,
-                    opacity: framing ? 1 : 0,
-                };
-            });
 
         const poseFromThumb = (thumb, layout) => {
             const scale = thumb.width / Math.max(1, layout.inner.width);
@@ -715,6 +905,10 @@ function Clothing() {
         const liveThumb = (slot) => {
             const base = viewer.rowBases[slot.row];
             const pose = rowPose[slot.row];
+            if (!base || !pose) {
+                const rect = slot.el.getBoundingClientRect();
+                return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+            }
             const scale = pose.scale || 1;
             const originX = base.left + base.width / 2;
             return {
@@ -732,6 +926,9 @@ function Clothing() {
         const releaseFlyer = (node) => {
             if (!node) return;
             node.root.style.willChange = 'auto';
+            node.small.removeAttribute('src');
+            node.large.removeAttribute('src');
+            node.small.style.visibility = '';
             node.large.style.opacity = '0';
             if (node === homeFlyer) {
                 node.root.hidden = true;
@@ -740,29 +937,49 @@ function Clothing() {
             node.root.remove();
         };
 
-        const configureFlyer = (node, layout, slot) => {
+        const sizeFlyer = (node, layout) => {
+            const previousWidth = parseFloat(node.root.style.width) || 0;
+            const previousHeight = parseFloat(node.root.style.height) || 0;
+            const resized =
+                previousWidth > 0 &&
+                (Math.abs(previousWidth - layout.totalW) > 1 || Math.abs(previousHeight - layout.totalH) > 1);
+            node.root.style.transition = resized
+                ? `width ${OPEN_TRANSITION_MS}ms ${OPEN_EASING}, height ${OPEN_TRANSITION_MS}ms ${OPEN_EASING}, padding ${OPEN_TRANSITION_MS}ms ${OPEN_EASING}`
+                : 'none';
+            node.root.style.width = `${layout.totalW}px`;
+            node.root.style.height = `${layout.totalH}px`;
+            node.root.style.padding = `${layout.border}px`;
+            node.large.style.top = `${layout.border}px`;
+            node.large.style.left = `${layout.border}px`;
+            node.large.style.width = `${layout.inner.width}px`;
+            node.large.style.height = `${layout.inner.height}px`;
+        };
+
+        const configureFlyer = (node, layout, spec) => {
             const { root, small, large } = node;
-            root.style.width = `${layout.totalW}px`;
-            root.style.height = `${layout.totalH}px`;
-            root.style.padding = `${layout.border}px`;
+            sizeFlyer(node, layout);
             root.style.transformOrigin = '0 0';
             root.style.willChange = 'transform';
             root.hidden = false;
-            small.src = slot.spec.src ? encodeURI(slot.spec.src) : '';
+            small.style.visibility = 'visible';
             large.style.opacity = '0';
-            large.style.top = `${layout.border}px`;
-            large.style.left = `${layout.border}px`;
-            large.style.width = `${layout.inner.width}px`;
-            large.style.height = `${layout.inner.height}px`;
-            if (slot.spec.srcFull) large.src = encodeURI(slot.spec.srcFull);
+            large.removeAttribute('src');
+            small.src = spec && spec.src ? encodeURI(spec.src) : '';
         };
 
-        const armLarge = (node, slot) => {
-            warmLarge(slot.spec).then((image) => {
+        const showLarge = (node) => {
+            node.small.style.visibility = 'hidden';
+            node.large.style.opacity = '1';
+        };
+
+        const armLarge = (node, spec) => {
+            warmLarge(spec).then((image) => {
                 if (!image || activeFlyer !== node) return;
-                if (!viewer || viewer.slot !== slot) return;
+                if (!viewer || viewer.spec !== spec) return;
                 node.large.src = image.src;
+                showLarge(node);
                 viewer.largeReady = true;
+                viewer.largeOpacity = 1;
             });
         };
 
@@ -794,6 +1011,7 @@ function Clothing() {
             applyRows(0);
             releaseFlyer(flyer);
             activeFlyer = homeFlyer;
+            unlockScroll();
             overlay.hidden = true;
             closeBtn.hidden = true;
             closeBtn.style.willChange = 'auto';
@@ -863,11 +1081,8 @@ function Clothing() {
 
             if (!viewer) return;
             if (viewer.largeReady) {
-                if (!viewer.largeFadeStart) viewer.largeFadeStart = now;
-                const fadeMs = LARGE_FADE_SECONDS * 1000;
-                const amount = easeOpen(Math.min(1, (now - viewer.largeFadeStart) / fadeMs));
-                viewer.largeOpacity = amount;
-                activeFlyer.large.style.opacity = String(amount);
+                viewer.largeOpacity = 1;
+                showLarge(activeFlyer);
             }
             closeBtn.style.opacity = String(viewer.rowAmount);
             closeBtn.style.pointerEvents = viewer.rowAmount > 0.08 && !viewer.closeDone ? 'auto' : 'none';
@@ -881,11 +1096,14 @@ function Clothing() {
         };
 
         const openViewer = (slot) => {
-            if (viewer || !slot?.spec) return;
+            const spec = slot && displayedSpec(slot);
+            if (viewer || !spec) return;
 
             const now = performance.now();
+            lockScroll();
+            const frames = visibleBounds();
             const bases = measureRows();
-            const layout = layoutViewer(slot, bases);
+            const layout = layoutViewer(spec, bases);
             const thumb = slot.el.getBoundingClientRect();
             const from = poseFromThumb(
                 {
@@ -901,7 +1119,8 @@ function Clothing() {
             activeFlyer = homeFlyer;
             viewer = {
                 slot,
-                shownKey: photoKey(slot.spec),
+                spec,
+                shownKey: photoKey(spec),
                 phase: 'opening',
                 t0: now,
                 duration: transitionMs,
@@ -910,7 +1129,8 @@ function Clothing() {
                 pose: from,
                 layout,
                 rowBases: bases,
-                rowTargets: rowTargetsFor(bases),
+                frameTop: frames.first,
+                frameBottom: frames.last,
                 rowMotion: 'in',
                 rowT0: now,
                 rowAmount: 0,
@@ -924,7 +1144,7 @@ function Clothing() {
                 largeFadeStart: 0,
             };
 
-            configureFlyer(activeFlyer, layout, slot);
+            configureFlyer(activeFlyer, layout, spec);
             placeOverlay(from, layout);
             overlay.hidden = false;
             closeBtn.hidden = false;
@@ -933,11 +1153,12 @@ function Clothing() {
             paint(slot);
             applyRows(0);
             play();
-            armLarge(activeFlyer, slot);
+            armLarge(activeFlyer, spec);
             closeBtn.focus({ preventScroll: true });
         };
 
-        const isFramingRow = (rowIndex) => rowIndex === 0 || rowIndex === ROW_COUNT - 1;
+        const isFramingRow = (rowIndex) =>
+            !!viewer && (rowIndex === viewer.frameTop || rowIndex === viewer.frameBottom);
 
         const switchTo = (slot) => {
             if (!viewer || viewer.phase === 'closing' || slot === viewer.slot) return;
@@ -948,14 +1169,18 @@ function Clothing() {
             let node;
             let from;
             let layout;
+            let spec;
 
             if (existing >= 0) {
                 const dep = viewer.departures.splice(existing, 1)[0];
                 node = dep.flyer;
                 from = dep.pose;
                 layout = dep.layout;
+                spec = dep.spec;
             } else {
-                layout = layoutViewer(slot, viewer.rowBases);
+                spec = displayedSpec(slot);
+                if (!spec) return;
+                layout = layoutViewer(spec, viewer.rowBases);
                 node = trackFlyer(makeFlyer());
                 const thumb = slot.el.getBoundingClientRect();
                 from = poseFromThumb(
@@ -967,12 +1192,13 @@ function Clothing() {
                     },
                     layout
                 );
-                configureFlyer(node, layout, slot);
+                configureFlyer(node, layout, spec);
             }
 
             activeFlyer.root.style.willChange = 'transform';
             viewer.departures.push({
                 slot: viewer.slot,
+                spec: viewer.spec,
                 shownKey: viewer.shownKey,
                 flyer: activeFlyer,
                 layout: viewer.layout,
@@ -986,7 +1212,8 @@ function Clothing() {
             document.body.append(node.root);
 
             viewer.slot = slot;
-            viewer.shownKey = photoKey(slot.spec);
+            viewer.spec = spec;
+            viewer.shownKey = photoKey(spec);
             viewer.phase = 'switching';
             viewer.t0 = now;
             viewer.from = from;
@@ -995,11 +1222,11 @@ function Clothing() {
             viewer.layout = layout;
             viewer.thumbOpacity = 0;
             viewer.largeOpacity = Number(node.large.style.opacity) || 0;
-            viewer.largeReady = node.large.naturalWidth > 0 || viewer.largeOpacity > 0;
-            viewer.largeFadeStart = viewer.largeReady ? now - LARGE_FADE_SECONDS * 1000 * viewer.largeOpacity : 0;
+            viewer.largeReady = viewer.largeOpacity >= 1 && !!node.large.getAttribute('src');
             placeOverlay(from, layout);
             node.root.hidden = false;
-            if (!viewer.largeReady) armLarge(node, slot);
+            sizeFlyer(node, layout);
+            if (!viewer.largeReady) armLarge(node, spec);
             paint(slot);
             play();
         };
@@ -1050,17 +1277,6 @@ function Clothing() {
             });
         };
 
-        const clearRows = () => {
-            if (viewer) finishViewer();
-            pool.forEach((slot) => slot.el.remove());
-            pool.length = 0;
-            hoverSlot = null;
-            hoverVisible = false;
-            hoverRing.style.opacity = '0';
-            startedRows.clear();
-            rows.forEach((rowEl) => rowEl.replaceChildren());
-        };
-
         const populateRow = (rowIndex, specs, mode) => {
             const rowEl = rows[rowIndex];
             if (!rowEl) return;
@@ -1070,7 +1286,7 @@ function Clothing() {
                 const el = document.createElement('div');
                 rowEl.appendChild(el);
                 const slot = {
-                    id: rowIndex * 100 + i,
+                    id: rowIndex * 1000 + i,
                     el,
                     row: rowIndex,
                     x: 0,
@@ -1102,7 +1318,9 @@ function Clothing() {
 
             const typicalStride = itemHeight * avgAspect() + ITEM_GAP_PX;
             const stagger = -((rowIndex * 0.41 * typicalStride) % typicalStride);
-            let cursorX = stagger - typicalStride;
+            const elapsed = (performance.now() - pageStartedAt) / 1000;
+            const phase = typicalStride > 0 ? (baseSpeed * elapsed) % typicalStride : 0;
+            let cursorX = stagger - typicalStride + phase;
             slots.forEach((slot) => {
                 slot.x = cursorX;
                 cursorX += slot.width + ITEM_GAP_PX;
@@ -1112,59 +1330,156 @@ function Clothing() {
             });
         };
 
-        const startRow = async (rowIndex, mode) => {
-            if (cancelled || startedRows.has(rowIndex)) return;
-            const specs = await takeDecodedSpecs(photosPerRow());
-            if (cancelled || startedRows.has(rowIndex) || !specs.length) {
-                specs.forEach(releaseReserved);
-                return;
-            }
+        let bootPromises = null;
+        let holdMotion = false;
+        const startRow = (rowIndex, mode) => {
+            if (cancelled || startedRows.has(rowIndex) || !rows[rowIndex]) return Promise.resolve();
             startedRows.add(rowIndex);
-            populateRow(rowIndex, specs, mode);
-            await decodeElements(rows[rowIndex]);
-            if (cancelled) return;
-            scheduleUpcoming();
-            refreshRowBoxes();
-            syncPlayback();
+            const raws = [];
+            const count = photosPerRow();
+            for (let i = 0; i < count; i += 1) {
+                const raw = nextRawItem();
+                if (!raw) break;
+                raws.push(raw);
+            }
+            const job = (async () => {
+                const specs = [];
+                for (const raw of raws) {
+                    if (cancelled || !rows[rowIndex] || !rows[rowIndex].isConnected) {
+                        raws.forEach(releaseReserved);
+                        startedRows.delete(rowIndex);
+                        return;
+                    }
+                    specs.push(await decodeSmall(raw));
+                }
+                const rowEl = rows[rowIndex];
+                if (cancelled || !rowEl || !rowEl.isConnected || !specs.length) {
+                    raws.forEach(releaseReserved);
+                    startedRows.delete(rowIndex);
+                    return;
+                }
+                if (mode !== 'enter-left') rowEl.style.visibility = 'hidden';
+                populateRow(rowIndex, specs, mode);
+                const mine = pool.filter((slot) => slot.row === rowIndex);
+                mine.forEach((slot) => {
+                    slot.frozen = true;
+                });
+                await decodeElements(rowEl);
+                if (cancelled || !rowEl.isConnected) return;
+                if (!holdMotion) {
+                    mine.forEach((slot) => {
+                        slot.frozen = false;
+                        paint(slot);
+                    });
+                }
+                rowEl.style.visibility = '';
+                scheduleUpcoming();
+                refreshRowBoxes();
+                syncPlayback();
+            })();
+            if (bootPromises) bootPromises.push(job);
+            return job;
         };
 
-        const fillAllRows = async (mode) => {
-            applyLayoutMetrics();
-            const perRow = photosPerRow();
-            const batches = [];
-            for (let rowIndex = 0; rowIndex < ROW_COUNT; rowIndex += 1) {
-                if (cancelled) return;
-                const specs = await takeDecodedSpecs(perRow);
-                if (cancelled) return;
-                batches.push(specs);
+        const introPlan = new Set();
+        let introRunning = false;
+        let introNextAt = INTRO_FIRST_DELAY_SECONDS;
+
+        const placeRow = (index) => {
+            const rowEl = rows[index];
+            if (!rowEl) return;
+            rowEl.style.top = `${index * stridePx()}px`;
+            rowEl.style.height = `${itemHeight}px`;
+        };
+
+        const removeRow = (index) => {
+            const rowEl = rows[index];
+            if (!rowEl) return;
+            if (viewer && viewer.slot && viewer.slot.row === index) return;
+            for (let i = pool.length - 1; i >= 0; i -= 1) {
+                if (pool[i].row !== index) continue;
+                releaseReserved(pool[i].spec);
+                pool.splice(i, 1);
             }
-            if (cancelled) return;
-            clearRows();
-            applyLayoutMetrics();
-            batches.forEach((specs, rowIndex) => {
-                if (!specs.length) return;
-                startedRows.add(rowIndex);
-                populateRow(rowIndex, specs, mode);
-            });
-            await decodeElements(section);
-            if (cancelled) return;
-            scheduleUpcoming();
-            refreshRowBoxes();
-            syncPlayback();
+            rowEl.remove();
+            rows[index] = null;
+            startedRows.delete(index);
+            introPlan.delete(index);
+        };
+
+        const ensureRow = (index, mode) => {
+            if (!rows[index]) {
+                const rowEl = document.createElement('div');
+                rowEl.className = 'floating-streams-row';
+                section.appendChild(rowEl);
+                rows[index] = rowEl;
+                rowPose[index] = { ty: 0, scale: 1 };
+            }
+            placeRow(index);
+            if (startedRows.has(index) || introPlan.has(index)) return;
+            if (mode === 'intro') {
+                const at = Math.max(
+                    introNextAt,
+                    (performance.now() - pageStartedAt) / 1000 + INTRO_MIN_GAP_SECONDS
+                );
+                scheduleIntroRow(index, at);
+                return;
+            }
+            startRow(index, 'filled');
+        };
+
+        const growSection = (throughIndex) => {
+            const needed = (throughIndex + 1) * stridePx() + viewHeight();
+            const current = parseFloat(section.style.height) || 0;
+            if (needed > current || pageScroll() + viewHeight() + stridePx() < needed) {
+                section.style.height = `${needed}px`;
+            }
+        };
+
+        const mountRange = () => {
+            const { first, last } = visibleBounds();
+            const from = Math.max(0, first - ROW_BUFFER);
+            const to = last + ROW_BUFFER;
+            growSection(to);
+            for (let index = from; index <= to; index += 1) {
+                const onScreen = index >= first && index <= last;
+                if (introRunning && onScreen && !startedRows.has(index)) ensureRow(index, 'intro');
+                else ensureRow(index, 'filled');
+            }
+            for (let index = 0; index < rows.length; index += 1) {
+                if (!rows[index]) continue;
+                if (index < from || index > to) removeRow(index);
+            }
+            for (let index = from; index <= to; index += 1) placeRow(index);
+        };
+
+        const scheduleIntroRow = (index, at) => {
+            if (introPlan.has(index) || startedRows.has(index)) return;
+            introPlan.add(index);
+            introNextAt = Math.max(introNextAt, at + INTRO_MIN_GAP_SECONDS);
+            const delay = Math.max(0, at * 1000 - (performance.now() - pageStartedAt));
+            const timer = window.setTimeout(() => {
+                if (cancelled || !rows[index]) return;
+                if (at === INTRO_FIRST_DELAY_SECONDS) markIntroPlayed();
+                startRow(index, 'enter-left');
+            }, delay);
+            introTimers.push(timer);
         };
 
         const outlinePx = (slot, rowRects) => {
             const border = viewerBorderPx();
-            const innerWidth = layoutViewer(slot, rowRects).inner.width;
+            const innerWidth = layoutViewer(slot.spec, rowRects).inner.width;
             if (!(innerWidth > 0) || !(slot.width > 0)) return 0;
             return (border / innerWidth) * slot.width;
         };
 
         let rowBoxes = null;
         const refreshRowBoxes = () => {
-            rowBoxes = rows.map((row) => {
+            rowBoxes = [];
+            rows.forEach((row, index) => {
+                if (!row) return;
                 const rect = row.getBoundingClientRect();
-                return {
+                rowBoxes[index] = {
                     left: rect.left,
                     top: rect.top,
                     width: rect.width,
@@ -1174,8 +1489,9 @@ function Clothing() {
         };
 
         const slotScreenRect = (slot) => {
-            const base = rowBoxes[slot.row];
-            const pose = rowPose[slot.row];
+            const base = rowBoxes && rowBoxes[slot.row];
+            const pose = rowPose[slot.row] || { ty: 0, scale: 1 };
+            if (!base) return null;
             const scale = pose.scale || 1;
             const originX = base.left + base.width / 2;
             return {
@@ -1196,6 +1512,7 @@ function Clothing() {
                 if (viewer && (!isFramingRow(slot.row) || slot === viewer.slot)) continue;
                 const rect = slotScreenRect(slot);
                 if (
+                    rect &&
                     pointerX >= rect.left &&
                     pointerX < rect.left + rect.width &&
                     pointerY >= rect.top &&
@@ -1209,6 +1526,7 @@ function Clothing() {
 
         const placeHoverRing = (slot) => {
             const rect = slotScreenRect(slot);
+            if (!rect) return;
             hoverRing.style.width = `${rect.width}px`;
             hoverRing.style.height = `${rect.height}px`;
             hoverRing.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
@@ -1333,31 +1651,38 @@ function Clothing() {
         applyLayoutMetrics();
 
         const playIntro = !reducedMotion && !hasPlayedIntro();
+        const onScreenIndexes = () => {
+            const { first, last } = visibleBounds();
+            const indexes = [];
+            for (let index = first; index <= last; index += 1) indexes.push(index);
+            return indexes;
+        };
 
         if (playIntro) {
+            introRunning = true;
             preloadFirstRowSmalls();
-            const firstIndex = Math.max(0, Math.min(ROW_COUNT, INTRO_FIRST_ROW) - 1);
-            const rest = shuffle(
-                Array.from({ length: ROW_COUNT }, (_, index) => index).filter(
-                    (index) => index !== firstIndex
-                )
-            );
-            const order = [firstIndex, ...rest];
-
-            INTRO_ROW_DELAYS_SECONDS.forEach((seconds, index) => {
-                const rowIndex = order[index];
-                if (rowIndex === undefined) return;
-                const timer = window.setTimeout(() => {
-                    if (cancelled) return;
-                    if (index === 0) markIntroPlayed();
-                    startRow(rowIndex, 'enter-left');
-                }, seconds * 1000);
-                introTimers.push(timer);
-            });
+            const schedule = introStartTimes(onScreenIndexes());
+            schedule.forEach((item) => scheduleIntroRow(item.index, item.at));
+            introNextAt = (schedule[schedule.length - 1]?.at || INTRO_FIRST_DELAY_SECONDS) + INTRO_MIN_GAP_SECONDS;
+            mountRange();
+            const finishIntro = window.setTimeout(() => {
+                introRunning = false;
+            }, Math.max(0, introNextAt * 1000));
+            introTimers.push(finishIntro);
         } else {
             section.style.visibility = 'hidden';
-            fillAllRows('filled').then(() => {
+            holdMotion = true;
+            bootPromises = [];
+            mountRange();
+            const pending = bootPromises;
+            bootPromises = null;
+            Promise.all(pending).then(() => {
                 if (cancelled) return;
+                holdMotion = false;
+                pool.forEach((slot) => {
+                    slot.frozen = false;
+                    paint(slot);
+                });
                 section.style.visibility = '';
                 syncPlayback();
             });
@@ -1368,27 +1693,68 @@ function Clothing() {
                 inView = entry.isIntersecting;
                 syncPlayback();
             },
-            { threshold: 0.05 }
+            { threshold: 0 }
         );
         intersection.observe(section);
 
         const onVisibility = () => syncPlayback();
         document.addEventListener('visibilitychange', onVisibility);
 
-        let resizeTimer = 0;
+        let scrollFrame = 0;
+        const onScroll = () => {
+            if (scrollLockY != null || pageIsZoomed()) return;
+            if (scrollFrame) return;
+            scrollFrame = requestAnimationFrame(() => {
+                scrollFrame = 0;
+                if (cancelled || scrollLockY != null) return;
+                mountRange();
+                refreshRowBoxes();
+            });
+        };
+        window.addEventListener('scroll', onScroll, { passive: true });
+
+        let resizeFrame = 0;
         const onResize = () => {
-            window.clearTimeout(resizeTimer);
-            resizeTimer = window.setTimeout(() => {
-                const wasRunning = running;
-                clearIntroTimers();
-                pause();
-                fillAllRows('filled').then(() => {
-                    if (cancelled) return;
-                    if (wasRunning) syncPlayback();
-                });
-            }, 150);
+            if (pageIsZoomed()) return;
+            if (resizeFrame) return;
+            resizeFrame = requestAnimationFrame(() => {
+                resizeFrame = 0;
+                if (cancelled || pageIsZoomed()) return;
+                if (viewer) {
+                    viewer.rowBases = measureRows();
+                    viewer.layout = layoutViewer(viewer.spec, viewer.rowBases);
+                    viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
+                    if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
+                    refreshRowBoxes();
+                    return;
+                }
+                const previousHeight = itemHeight;
+                applyLayoutMetrics();
+                const scale = previousHeight > 0 ? itemHeight / previousHeight : 1;
+                if (Math.abs(scale - 1) > 0.001) {
+                    pool.forEach((slot) => {
+                        slot.x *= scale;
+                        slot.width *= scale;
+                        slot.speed = speedFor(slot.id);
+                        slot.el.style.width = `${slot.width}px`;
+                        slot.el.style.height = `${itemHeight}px`;
+                        paint(slot);
+                    });
+                } else {
+                    pool.forEach((slot) => {
+                        slot.speed = speedFor(slot.id);
+                    });
+                }
+                mountRange();
+                refreshRowBoxes();
+                syncPlayback();
+            });
         };
         window.addEventListener('resize', onResize);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', onResize);
+            window.visualViewport.addEventListener('scroll', onScroll);
+        }
 
         return () => {
             cancelled = true;
@@ -1398,14 +1764,20 @@ function Clothing() {
             document.removeEventListener('visibilitychange', onVisibility);
             document.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('resize', onResize);
+            window.removeEventListener('scroll', onScroll);
+            if (window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', onResize);
+                window.visualViewport.removeEventListener('scroll', onScroll);
+            }
             if (fineHover) {
                 window.removeEventListener('pointermove', onHoverPointerMove);
                 window.removeEventListener('pointerout', onHoverPointerOut);
                 hoverRing.remove();
             }
-            window.clearTimeout(resizeTimer);
-            document.documentElement.style.overflow = previousHtmlOverflow;
-            document.body.style.overflow = previousBodyOverflow;
+            if (resizeFrame) cancelAnimationFrame(resizeFrame);
+            if (scrollFrame) cancelAnimationFrame(scrollFrame);
+            unlockScroll();
+            section.replaceChildren();
             if (menuEl) {
                 menuEl.style.opacity = '';
                 menuEl.style.pointerEvents = '';
@@ -1437,17 +1809,7 @@ function Clothing() {
                 ref={sectionRef}
                 className="floating-streams"
                 aria-label="Floating image streams"
-            >
-                {Array.from({ length: ROW_COUNT }, (_, index) => (
-                    <div
-                        key={index}
-                        className="floating-streams-row"
-                        ref={(node) => {
-                            rowRefs.current[index] = node;
-                        }}
-                    />
-                ))}
-            </section>
+            />
         </div>
     );
 }

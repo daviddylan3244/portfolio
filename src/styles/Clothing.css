@@ -1,12 +1,8 @@
 .clothing-container {
-    height: 100vh;
-    height: 100dvh;
-    max-height: 100vh;
-    max-height: 100dvh;
+    min-height: 100vh;
+    min-height: 100dvh;
     color: white;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
+    overflow: visible;
 }
 
 .clothing-container .header-container {
@@ -14,8 +10,12 @@
     z-index: 6;
     flex: 0 0 auto;
     align-items: center;
-    padding-top: 0;
+    padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: 0;
+}
+
+.clothing-container .header-nav {
+    top: calc(var(--menu-inset) + env(safe-area-inset-top, 0px));
 }
 
 .clothing-container .header-logo {
@@ -30,18 +30,18 @@
     position: relative;
     width: 100%;
     max-width: 100%;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: hidden;
-    padding: 0 0 1rem;
+    overflow: visible;
+    padding: 0;
     box-sizing: border-box;
+    touch-action: pan-y;
 }
 
 .floating-streams-row {
-    position: relative;
+    position: absolute;
+    left: 0;
     width: 100%;
     height: var(--stream-item-height);
-    margin-bottom: var(--stream-row-gap);
+    margin: 0;
     overflow: hidden;
     transform-origin: top center;
 }
@@ -80,6 +80,12 @@
     will-change: transform;
     pointer-events: auto;
     cursor: pointer;
+}
+
+@media (max-width: 768px) {
+    .stream-item {
+        will-change: auto;
+    }
 }
 
 .stream-item img {
@@ -157,6 +163,7 @@
 .stream-flyer-large {
     position: absolute;
     opacity: 0;
+    background: #fff;
 }
 
 .stream-close {
