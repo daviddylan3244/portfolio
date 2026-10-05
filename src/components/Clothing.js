@@ -47,7 +47,9 @@ const MOBILE_BREAKPOINT_PX = 768;
 
 // Extra copies of the library kept in the live pool so the row never has a hole.
 const DESKTOP_POOL_BUFFER = 2;
-const MOBILE_POOL_BUFFER = 1;
+const MOBILE_POOL_BUFFER = 0;
+const MOBILE_ROW_BUFFER = 2;
+const MOBILE_OPEN_SPEED = 0.45;
 const DECODE_CONCURRENCY = 3;
 
 // Click-to-open viewer
@@ -63,7 +65,7 @@ const CLOSE_BUTTON_PX = 44;
 // Item library — web-sized photos. src = rows, srcFull = enlarged view.
 // Raise PHOTO_COUNT when a new batch is added. Files are photo-1 through photo-N.
 // ---------------------------------------------------------------------------
-const PHOTO_COUNT = 147;
+const PHOTO_COUNT = 166;
 const PHOTO_DIR = '/photos/Website digital/Photography';
 // 47 and 50 are held out on purpose.
 // 114–121 have a small export in the Large folder.
@@ -402,10 +404,6 @@ function Clothing() {
         let pointerY = 0;
         let pointerInside = false;
         let hoverSlot = null;
-        let hoverVisible = false;
-        const hoverRing = document.createElement('div');
-        hoverRing.className = 'stream-hover-ring';
-        if (fineHover) document.body.append(hoverRing);
         const largePromises = new Map();
         let viewer = null;
 
@@ -419,6 +417,13 @@ function Clothing() {
         let scrollLockY = null;
         const pageStartedAt = performance.now();
 
+        let streamOriginX = 0;
+        let streamOriginY = 0;
+        const cacheStreamOrigin = () => {
+            const rect = section.getBoundingClientRect();
+            streamOriginY = rect.top + pageScroll();
+            streamOriginX = rect.left + (window.scrollX || window.pageXOffset || 0);
+        };
         const applyLayoutMetrics = () => {
             viewportWidth = section.clientWidth || window.innerWidth;
             itemHeight = clampItemHeight(window.innerWidth);
@@ -428,6 +433,7 @@ function Clothing() {
                 '--stream-row-gap',
                 `${itemHeight * VERTICAL_GAP_RATIO}px`
             );
+            cacheStreamOrigin();
         };
 
         const stridePx = () => itemHeight * (1 + VERTICAL_GAP_RATIO);
@@ -652,13 +658,17 @@ function Clothing() {
                     ? 0
                     : Math.sin(slot.swayPhase) * SWAY_AMOUNT_PX;
             const scale = slot.scale || 1;
-            slot.el.style.transform = `translate3d(${slot.x}px, ${sway}px, 0) scale(${scale})`;
-            const heldOpacity = opacityForSlot(slot);
-            if (heldOpacity !== null) {
-                slot.el.style.opacity = String(heldOpacity);
-            } else if (!DEPTH_EFFECT_ENABLED || !SPEED_VARIATION) {
-                slot.el.style.opacity = '1';
+            const transform = `translate3d(${slot.x}px, ${sway}px, 0) scale(${scale})`;
+            if (slot.paintedTransform !== transform) {
+                slot.paintedTransform = transform;
+                slot.el.style.transform = transform;
             }
+            const heldOpacity = opacityForSlot(slot);
+            if (heldOpacity === null && DEPTH_EFFECT_ENABLED && SPEED_VARIATION) return;
+            const opacity = heldOpacity === null ? 1 : heldOpacity;
+            if (slot.paintedOpacity === opacity) return;
+            slot.paintedOpacity = opacity;
+            slot.el.style.opacity = String(opacity);
         };
 
         const leftmostInRow = (rowIndex, except) => {
@@ -690,11 +700,16 @@ function Clothing() {
             if (!raw) {
                 const index = pool.indexOf(slot);
                 if (index >= 0) pool.splice(index, 1);
+                if (slot === hoverSlot) hoverSlot = null;
                 slot.el.remove();
                 return;
             }
             const place = (spec) => {
                 if (cancelled || !slot.el.isConnected) return;
+                if (slot === hoverSlot) {
+                    slot.el.classList.remove('is-hovered');
+                    hoverSlot = null;
+                }
                 if (slotIsHeld(slot)) {
                     releaseReserved(spec);
                     slot.frozen = false;
@@ -973,14 +988,31 @@ function Clothing() {
         };
 
         const armLarge = (node, spec) => {
-            warmLarge(spec).then((image) => {
+            const reveal = (image) => {
                 if (!image || activeFlyer !== node) return;
-                if (!viewer || viewer.spec !== spec) return;
+                if (!viewer || viewer.spec !== spec || viewer.largeShown) return;
                 node.large.src = image.src;
                 showLarge(node);
                 viewer.largeReady = true;
                 viewer.largeOpacity = 1;
+                viewer.largeShown = true;
+            };
+            const ready = warmLarge(spec).then((image) => {
+                if (!image) return null;
+                if (typeof image.decode !== 'function') return image;
+                return image.decode().then(() => image).catch(() => image);
             });
+            const waitForOpen = window.innerWidth <= MOBILE_BREAKPOINT_PX
+                && viewer
+                && (viewer.phase === 'opening' || viewer.phase === 'switching');
+            if (!waitForOpen) {
+                ready.then(reveal);
+                return;
+            }
+            const elapsed = performance.now() - viewer.t0;
+            window.setTimeout(() => {
+                ready.then(reveal);
+            }, Math.max(0, viewer.duration - elapsed));
         };
 
         const placeOverlay = (pose, layout) => {
@@ -1045,6 +1077,20 @@ function Clothing() {
 
         const advanceViewer = (now, dt) => {
             if (!viewer) return;
+            if (
+                viewer.phase === 'open'
+                && viewer.rowMotion === 'hold'
+                && viewer.departures.length === 0
+            ) {
+                if (!viewer.settled) {
+                    applyRows(1);
+                    placeOverlay(viewer.to, viewer.layout);
+                    viewer.settled = true;
+                }
+                if (viewer.largeReady && !viewer.largeShown) showLarge(activeFlyer);
+                return;
+            }
+            viewer.settled = false;
             const duration = Math.max(1, viewer.duration);
 
             if (viewer.rowMotion === 'in') {
@@ -1142,6 +1188,8 @@ function Clothing() {
                 largeReady: false,
                 largeOpacity: 0,
                 largeFadeStart: 0,
+                settled: false,
+                largeShown: false,
             };
 
             configureFlyer(activeFlyer, layout, spec);
@@ -1221,6 +1269,8 @@ function Clothing() {
             viewer.pose = from;
             viewer.layout = layout;
             viewer.thumbOpacity = 0;
+            viewer.settled = false;
+            viewer.largeShown = false;
             viewer.largeOpacity = Number(node.large.style.opacity) || 0;
             viewer.largeReady = viewer.largeOpacity >= 1 && !!node.large.getAttribute('src');
             placeOverlay(from, layout);
@@ -1263,10 +1313,29 @@ function Clothing() {
             el.setAttribute('role', 'button');
             el.setAttribute('aria-label', 'Open image');
             const primeLarge = () => warmLarge(slot.spec);
-            el.addEventListener('pointerdown', primeLarge);
+            el.addEventListener('pointerdown', (event) => {
+                if (event.pointerType === 'touch') {
+                    slot.tapX = event.clientX;
+                    slot.tapY = event.clientY;
+                    return;
+                }
+                primeLarge();
+            });
+            el.addEventListener('pointerup', (event) => {
+                if (event.pointerType !== 'touch') return;
+                const dx = Math.abs(event.clientX - slot.tapX);
+                const dy = Math.abs(event.clientY - slot.tapY);
+                if (dx > 12 || dy > 12) return;
+                slot.openedFromTap = true;
+                activateSlot(slot);
+            });
             el.addEventListener('mouseenter', primeLarge);
             el.addEventListener('click', (event) => {
                 event.stopPropagation();
+                if (slot.openedFromTap) {
+                    slot.openedFromTap = false;
+                    return;
+                }
                 activateSlot(slot);
             });
             el.addEventListener('keydown', (event) => {
@@ -1374,7 +1443,6 @@ function Clothing() {
                 }
                 rowEl.style.visibility = '';
                 scheduleUpcoming();
-                refreshRowBoxes();
                 syncPlayback();
             })();
             if (bootPromises) bootPromises.push(job);
@@ -1384,6 +1452,23 @@ function Clothing() {
         const introPlan = new Set();
         let introRunning = false;
         let introNextAt = INTRO_FIRST_DELAY_SECONDS;
+
+        const rowOffstage = new Set();
+        const rowObserver = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                const index = Number(entry.target.dataset.rowIndex);
+                if (!Number.isFinite(index)) return;
+                if (entry.isIntersecting) {
+                    rowOffstage.delete(index);
+                    return;
+                }
+                rowOffstage.add(index);
+                if (window.innerWidth > MOBILE_BREAKPOINT_PX) return;
+                pool.forEach((slot) => {
+                    if (slot.row === index) slot.el.style.willChange = '';
+                });
+            });
+        }, { root: null, rootMargin: '160px 0px', threshold: 0 });
 
         const placeRow = (index) => {
             const rowEl = rows[index];
@@ -1398,10 +1483,13 @@ function Clothing() {
             if (viewer && viewer.slot && viewer.slot.row === index) return;
             for (let i = pool.length - 1; i >= 0; i -= 1) {
                 if (pool[i].row !== index) continue;
+                if (pool[i] === hoverSlot) hoverSlot = null;
                 releaseReserved(pool[i].spec);
                 pool.splice(i, 1);
             }
             rowEl.remove();
+            rowObserver.unobserve(rowEl);
+            rowOffstage.delete(index);
             rows[index] = null;
             startedRows.delete(index);
             introPlan.delete(index);
@@ -1411,7 +1499,9 @@ function Clothing() {
             if (!rows[index]) {
                 const rowEl = document.createElement('div');
                 rowEl.className = 'floating-streams-row';
+                rowEl.dataset.rowIndex = String(index);
                 section.appendChild(rowEl);
+                rowObserver.observe(rowEl);
                 rows[index] = rowEl;
                 rowPose[index] = { ty: 0, scale: 1 };
             }
@@ -1436,10 +1526,13 @@ function Clothing() {
             }
         };
 
+        let mountedKey = '';
         const mountRange = () => {
             const { first, last } = visibleBounds();
-            const from = Math.max(0, first - ROW_BUFFER);
-            const to = last + ROW_BUFFER;
+            const buffer = window.innerWidth <= MOBILE_BREAKPOINT_PX ? MOBILE_ROW_BUFFER : ROW_BUFFER;
+            const from = Math.max(0, first - buffer);
+            const to = last + buffer;
+            mountedKey = `${first}:${last}`;
             growSection(to);
             for (let index = from; index <= to; index += 1) {
                 const onScreen = index >= first && index <= last;
@@ -1466,57 +1559,46 @@ function Clothing() {
             introTimers.push(timer);
         };
 
-        const outlinePx = (slot, rowRects) => {
+        const outlineFor = (slot) => {
+            if (!slot?.spec || !(slot.width > 0)) return 0;
             const border = viewerBorderPx();
-            const innerWidth = layoutViewer(slot.spec, rowRects).inner.width;
-            if (!(innerWidth > 0) || !(slot.width > 0)) return 0;
-            return (border / innerWidth) * slot.width;
-        };
-
-        let rowBoxes = null;
-        const refreshRowBoxes = () => {
-            rowBoxes = [];
-            rows.forEach((row, index) => {
-                if (!row) return;
-                const rect = row.getBoundingClientRect();
-                rowBoxes[index] = {
-                    left: rect.left,
-                    top: rect.top,
-                    width: rect.width,
-                    height: rect.height,
+            const bases = [];
+            const top = streamOriginY - pageScroll();
+            const stride = stridePx();
+            for (let index = 0; index < rows.length; index += 1) {
+                if (!rows[index]) continue;
+                bases[index] = {
+                    top: top + index * stride,
+                    left: streamOriginX,
+                    width: viewportWidth,
+                    height: itemHeight,
                 };
-            });
-        };
-
-        const slotScreenRect = (slot) => {
-            const base = rowBoxes && rowBoxes[slot.row];
-            const pose = rowPose[slot.row] || { ty: 0, scale: 1 };
-            if (!base) return null;
-            const scale = pose.scale || 1;
-            const originX = base.left + base.width / 2;
-            return {
-                left: originX + (slot.x - base.width / 2) * scale,
-                top: base.top + pose.ty,
-                width: slot.width * scale,
-                height: itemHeight * scale,
-            };
+            }
+            const innerWidth = layoutViewer(slot.spec, bases).inner.width;
+            if (!(innerWidth > 0)) return 0;
+            return Math.max(1, Math.round((border / innerWidth) * slot.width));
         };
 
         const slotUnderPointer = () => {
-            if (!rowBoxes) return null;
+            const originY = streamOriginY - pageScroll();
+            const originX = streamOriginX - (window.scrollX || window.pageXOffset || 0);
+            const stride = stridePx();
             for (let i = pool.length - 1; i >= 0; i -= 1) {
                 const slot = pool[i];
                 if (!slot.spec || slot.frozen) continue;
                 if (slot.el.style.pointerEvents === 'none') continue;
-                if (Number(slot.el.style.opacity) === 0) continue;
+                if (slot.el.style.opacity === '0') continue;
                 if (viewer && (!isFramingRow(slot.row) || slot === viewer.slot)) continue;
-                const rect = slotScreenRect(slot);
+                const scale = slot.scale || 1;
+                const width = slot.width * scale;
+                const height = itemHeight * scale;
+                const left = originX + slot.x + (slot.width - width) / 2;
+                const top = originY + slot.row * stride + (itemHeight - height) / 2;
                 if (
-                    rect &&
-                    pointerX >= rect.left &&
-                    pointerX < rect.left + rect.width &&
-                    pointerY >= rect.top &&
-                    pointerY < rect.top + rect.height
+                    pointerX >= left
+                    && pointerX < left + width
+                    && pointerY >= top
+                    && pointerY < top + height
                 ) {
                     return slot;
                 }
@@ -1524,32 +1606,15 @@ function Clothing() {
             return null;
         };
 
-        const placeHoverRing = (slot) => {
-            const rect = slotScreenRect(slot);
-            if (!rect) return;
-            hoverRing.style.width = `${rect.width}px`;
-            hoverRing.style.height = `${rect.height}px`;
-            hoverRing.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
-        };
-
         const syncHover = () => {
             if (!fineHover || (!pointerInside && !hoverSlot)) return;
-            if (viewer || !rowBoxes) refreshRowBoxes();
             const slot = pointerInside ? slotUnderPointer() : null;
-            if (slot) {
-                if (slot !== hoverSlot) {
-                    hoverSlot = slot;
-                    hoverRing.style.outlineWidth = `${outlinePx(slot, rowBoxes)}px`;
-                }
-                hoverVisible = true;
-                hoverRing.style.opacity = '1';
-                placeHoverRing(slot);
-                return;
-            }
-            if (!hoverSlot) return;
-            hoverVisible = false;
-            hoverRing.style.opacity = '0';
-            if (rowBoxes) placeHoverRing(hoverSlot);
+            if (slot === hoverSlot) return;
+            if (hoverSlot) hoverSlot.el.classList.remove('is-hovered');
+            hoverSlot = slot;
+            if (!slot) return;
+            slot.el.style.setProperty('--stream-outline', `${outlineFor(slot)}px`);
+            slot.el.classList.add('is-hovered');
         };
 
         const onHoverPointerMove = (event) => {
@@ -1567,15 +1632,9 @@ function Clothing() {
             pointerInside = false;
         };
 
-        const onHoverFadeEnd = (event) => {
-            if (event.propertyName !== 'opacity' || hoverVisible) return;
-            hoverSlot = null;
-        };
-
         if (fineHover) {
             window.addEventListener('pointermove', onHoverPointerMove, { passive: true });
             window.addEventListener('pointerout', onHoverPointerOut);
-            hoverRing.addEventListener('transitionend', onHoverFadeEnd);
         }
 
         const tick = (now) => {
@@ -1584,12 +1643,23 @@ function Clothing() {
             lastTime = now;
 
             const motionScale = reducedMotion ? REDUCED_MOTION_SPEED_SCALE : 1;
+            const mobileMotion = window.innerWidth <= MOBILE_BREAKPOINT_PX;
             if (motionScale > 0 && dt > 0) {
                 for (let i = 0; i < pool.length; i += 1) {
                     const slot = pool[i];
                     if (slot.frozen) continue;
-                    slot.x += slot.speed * motionScale * dt;
+                    const onStage = !rowOffstage.has(slot.row);
+                    if (!onStage && !(viewer && slot === viewer.slot)) continue;
+                    let speedScale = motionScale;
+                    if (mobileMotion && viewer) {
+                        if (!isFramingRow(slot.row) && slot !== viewer.slot) continue;
+                        speedScale *= MOBILE_OPEN_SPEED;
+                    }
+                    slot.x += slot.speed * speedScale * dt;
                     if (SWAY_SPEED) slot.swayPhase += SWAY_SPEED * dt;
+                    if (mobileMotion && slot.el.style.willChange !== 'transform') {
+                        slot.el.style.willChange = 'transform';
+                    }
                     if (slot.x > viewportWidth) recycle(slot);
                     else paint(slot);
                 }
@@ -1598,7 +1668,7 @@ function Clothing() {
             }
 
             advanceViewer(now, dt);
-            syncHover();
+            if (fineHover) syncHover();
 
             if (running) rafId = requestAnimationFrame(tick);
         };
@@ -1707,8 +1777,9 @@ function Clothing() {
             scrollFrame = requestAnimationFrame(() => {
                 scrollFrame = 0;
                 if (cancelled || scrollLockY != null) return;
+                const { first, last } = visibleBounds();
+                if (`${first}:${last}` === mountedKey) return;
                 mountRange();
-                refreshRowBoxes();
             });
         };
         window.addEventListener('scroll', onScroll, { passive: true });
@@ -1725,7 +1796,10 @@ function Clothing() {
                     viewer.layout = layoutViewer(viewer.spec, viewer.rowBases);
                     viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
                     if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
-                    refreshRowBoxes();
+                    cacheStreamOrigin();
+                    if (fineHover && hoverSlot) {
+                        hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
+                    }
                     return;
                 }
                 const previousHeight = itemHeight;
@@ -1746,7 +1820,9 @@ function Clothing() {
                     });
                 }
                 mountRange();
-                refreshRowBoxes();
+                if (fineHover && hoverSlot) {
+                    hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
+                }
                 syncPlayback();
             });
         };
@@ -1761,6 +1837,7 @@ function Clothing() {
             clearIntroTimers();
             pause();
             intersection.disconnect();
+            rowObserver.disconnect();
             document.removeEventListener('visibilitychange', onVisibility);
             document.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('resize', onResize);
@@ -1772,7 +1849,6 @@ function Clothing() {
             if (fineHover) {
                 window.removeEventListener('pointermove', onHoverPointerMove);
                 window.removeEventListener('pointerout', onHoverPointerOut);
-                hoverRing.remove();
             }
             if (resizeFrame) cancelAnimationFrame(resizeFrame);
             if (scrollFrame) cancelAnimationFrame(scrollFrame);

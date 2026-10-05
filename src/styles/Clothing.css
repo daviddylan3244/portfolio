@@ -42,8 +42,10 @@
     width: 100%;
     height: var(--stream-item-height);
     margin: 0;
-    overflow: hidden;
+    overflow-x: clip;
+    overflow-y: visible;
     transform-origin: top center;
+    contain: layout;
 }
 
 .floating-streams-row:last-child {
@@ -80,6 +82,14 @@
     will-change: transform;
     pointer-events: auto;
     cursor: pointer;
+    outline-style: solid;
+    outline-width: var(--stream-outline, 0px);
+    outline-color: transparent;
+    transition: outline-color 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.stream-item.is-hovered {
+    outline-color: #FFFFFF;
 }
 
 @media (max-width: 768px) {
@@ -101,21 +111,10 @@
 }
 
 .stream-item:focus-visible {
-    outline: 2px solid rgba(255, 255, 255, 0.9);
+    outline-style: solid;
+    outline-width: 2px;
+    outline-color: rgba(255, 255, 255, 0.9);
     outline-offset: 3px;
-}
-
-.stream-hover-ring {
-    position: fixed;
-    left: 0;
-    top: 0;
-    z-index: 46;
-    box-sizing: border-box;
-    pointer-events: none;
-    outline: solid #FFFFFF;
-    outline-width: 0;
-    opacity: 0;
-    transition: opacity 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .stream-item.is-hidden {
@@ -209,13 +208,13 @@
 @media (prefers-reduced-motion: reduce) {
     .stream-item {
         will-change: auto;
+        transition: none;
     }
 
     .floating-streams-row,
     .stream-overlay,
     .stream-close,
-    .stream-flyer,
-    .stream-hover-ring {
+    .stream-flyer {
         transition: none;
     }
 }
