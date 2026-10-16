@@ -2,6 +2,11 @@ import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/Header.css';
 import '../styles/Clothing.css';
+import photoManifest from '../data/photo-manifest.json';
+
+const ASPECT_BY_NUMBER = new Map(
+    photoManifest.map((entry) => [entry.number, entry.aspect])
+);
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -54,8 +59,9 @@ const DECODE_CONCURRENCY = 4;
 const LOOKAHEAD_SCREENS = 2;
 const FAST_SCROLL_SCREENS = 4;
 const FAST_SCROLL_PX_PER_SEC = 1400;
-const DECODED_CACHE_LIMIT = 160;
-const READY_POOL_MIN = 24;
+const DECODED_CACHE_LIMIT = 400;
+const READY_POOL_MIN_DESKTOP = 72;
+const READY_POOL_MIN_MOBILE = 32;
 const HEIGHT_CHUNK_ROWS = 20;
 const LARGE_HOVER_DELAY_MS = 350;
 
@@ -72,14 +78,16 @@ const CLOSE_BUTTON_PX = 44;
 // Item library — web-sized photos. src = rows, srcFull = enlarged view.
 // Raise PHOTO_COUNT when a new batch is added. Files are photo-1 through photo-N.
 // ---------------------------------------------------------------------------
-const PHOTO_COUNT = 166;
+const PHOTO_COUNT = 187;
 const PHOTO_DIR = '/photos/Website digital/Photography';
 // 47 and 50 are held out on purpose.
 // 114–121 have a small export in the Large folder.
 const EXCLUDED_PHOTOS = [47, 50, 114, 115, 116, 117, 118, 119, 120, 121];
+// Skip numbers that are missing from small or Large (177 has neither file).
+const MISSING_PHOTOS = [177];
 
 const STREAM_LIBRARY = Array.from({ length: PHOTO_COUNT }, (_, index) => index + 1)
-    .filter((number) => !EXCLUDED_PHOTOS.includes(number))
+    .filter((number) => !EXCLUDED_PHOTOS.includes(number) && !MISSING_PHOTOS.includes(number))
     .map((number) => ({
         number,
         id: `photo-${number}`,
@@ -451,6 +459,42 @@ function Clothing() {
         let bag = [];
         const shownKeys = [];
         const reserved = new Set();
+        const photoStats =
+            process.env.NODE_ENV !== 'production'
+                ? { unique: 0, fallback: 0, seen: new Set(), firstRepeatAt: null, duplicates: 0 }
+                : null;
+
+        const noteDeal = (key, fallback) => {
+            if (!photoStats || !key) return;
+            if (fallback) photoStats.fallback += 1;
+            else photoStats.unique += 1;
+            const total = photoStats.unique + photoStats.fallback;
+            if (total === 1 || total % 25 === 0) {
+                console.info(
+                    '[photos] deals unique:',
+                    photoStats.unique,
+                    'fallback:',
+                    photoStats.fallback,
+                    'ready:',
+                    readyPoolCount(),
+                    'bag:',
+                    bag.length
+                );
+            }
+        };
+
+        const noteShown = (spec) => {
+            if (!photoStats) return;
+            const key = photoKey(spec);
+            if (!key || photoStats.firstRepeatAt != null) return;
+            if (photoStats.seen.has(key)) {
+                photoStats.firstRepeatAt = photoStats.seen.size;
+                console.info('[photos] unique before first repeat:', photoStats.firstRepeatAt);
+            } else {
+                photoStats.seen.add(key);
+            }
+        };
+        if (photoStats) window.__photoStats = photoStats;
         const spareRows = [];
         let allocatedRows = 0;
         let smallsInFlight = 0;
@@ -647,9 +691,12 @@ function Clothing() {
             decodedOrder.push(key);
         };
 
+        const readyPoolMin = () =>
+            window.innerWidth <= MOBILE_BREAKPOINT_PX ? READY_POOL_MIN_MOBILE : READY_POOL_MIN_DESKTOP;
+
         const trimDecodedCache = () => {
             const live = occupiedKeys();
-            const floor = live.size + READY_POOL_MIN;
+            const floor = live.size + readyPoolMin();
             const limit = Math.max(DECODED_CACHE_LIMIT, floor);
             while (decodedSpecs.size > limit) {
                 const victim = decodedOrder.find((key) => {
@@ -707,7 +754,7 @@ function Clothing() {
 
         const photosPerRow = () => computePerRow();
 
-        const occupiedKeys = (exceptSlot) => {
+        const tileKeys = (exceptSlot) => {
             const keys = new Set();
             pool.forEach((slot) => {
                 if (slot === exceptSlot || !slot.spec) return;
@@ -719,6 +766,11 @@ function Clothing() {
                     if (dep.shownKey) keys.add(dep.shownKey);
                 });
             }
+            return keys;
+        };
+
+        const occupiedKeys = (exceptSlot) => {
+            const keys = tileKeys(exceptSlot);
             reserved.forEach((key) => keys.add(key));
             return keys;
         };
@@ -739,10 +791,13 @@ function Clothing() {
                 const key = photoKey(item);
                 return key && !occupied.has(key) && !recentSet.has(key);
             });
-            bag = [
-                ...shuffle(rest),
-                ...recent.map((key) => libraryByKey.get(key)).filter(Boolean),
-            ];
+            const lateCount = Math.min(
+                recent.length,
+                Math.max(8, Math.ceil(STREAM_LIBRARY.length * 0.25))
+            );
+            const late = recent.slice(-lateCount).map((key) => libraryByKey.get(key)).filter(Boolean);
+            const earlier = recent.slice(0, recent.length - lateCount).map((key) => libraryByKey.get(key)).filter(Boolean);
+            bag = [...shuffle([...rest, ...earlier]), ...late];
         };
 
         const dealRaw = (exceptSlot) => {
@@ -779,60 +834,70 @@ function Clothing() {
             return slot.spec.img.parentNode === slot.el;
         };
 
-        const cloneReadySpec = (spec) => {
-            if (!spec?.img) return spec;
-            const img = spec.img.cloneNode(true);
-            img.alt = '';
-            img.draggable = false;
-            return { ...spec, img };
+        const aspectFor = (item) => {
+            const key = photoKey(item);
+            const decoded = key ? decodedSpecs.get(key) : null;
+            if (decoded?.aspectRatio) return decoded.aspectRatio;
+            if (item?.number != null && ASPECT_BY_NUMBER.has(item.number)) {
+                return ASPECT_BY_NUMBER.get(item.number);
+            }
+            return avgAspect();
         };
 
-        const pickFillSpec = (exceptSlot) => {
-            const unique = takeReadySpec(exceptSlot);
-            if (unique) return unique;
-            const visible = new Set();
-            pool.forEach((slot) => {
-                if (slot === exceptSlot || !slot.spec) return;
-                if (slot.x + slot.width > 0 && slot.x < viewportWidth) {
-                    visible.add(photoKey(slot.spec));
-                }
-            });
-            let duplicate = null;
-            decodedSpecs.forEach((spec) => {
-                if (duplicate || !spec?.img?.naturalWidth) return;
-                const owned = imgOwnedByOtherSlot(spec.img, exceptSlot);
-                const candidate = owned ? cloneReadySpec(spec) : spec;
-                if (!visible.has(photoKey(spec))) {
-                    duplicate = candidate;
-                    return;
-                }
-                if (!duplicate) duplicate = candidate;
-            });
-            return duplicate;
+        const specForAssign = (item, exceptSlot) => {
+            const key = photoKey(item);
+            if (!key) return null;
+            if (tileKeys(exceptSlot).has(key)) return null;
+            const decoded = decodedSpecs.get(key);
+            if (decoded?.img && imgOwnedByOtherSlot(decoded.img, exceptSlot)) return null;
+            if (decoded?.img) return decoded;
+            return {
+                ...item,
+                aspectRatio: decoded?.aspectRatio || aspectFor(item),
+                img: null,
+            };
+        };
+
+        const dealUniqueSpec = (exceptSlot) => {
+            for (let n = 0; n < STREAM_LIBRARY.length; n += 1) {
+                const raw = dealRaw(exceptSlot);
+                if (!raw) return null;
+                const spec = specForAssign(raw, exceptSlot);
+                if (spec) return spec;
+                releaseReserved(raw);
+            }
+            return null;
+        };
+
+        const attachDecoded = (slot, loaded) => {
+            if (!slot || cancelled || !loaded) return;
+            if (photoKey(slot.spec) !== photoKey(loaded)) return;
+            if (!loaded.img || imgOwnedByOtherSlot(loaded.img, slot)) return;
+            const prevWidth = slot.width;
+            applyVisuals(slot, loaded);
+            if (Math.abs(slot.width - prevWidth) > 0.5) packRow(slot.row);
+            paint(slot);
+        };
+
+        const decodeOntoSlot = (slot, item) => {
+            if (!slot || !item) return;
+            decodeSmall(item).then((loaded) => attachDecoded(slot, loaded));
         };
 
         const takeReadySpec = (exceptSlot) => {
             const occupied = occupiedKeys(exceptSlot);
             if (exceptSlot?.spec) occupied.add(photoKey(exceptSlot.spec));
-            const take = (item) => {
+            if (!bag.length) refillBag();
+            for (let i = 0; i < bag.length; i += 1) {
+                const item = bag[i];
                 const key = photoKey(item);
-                if (!key || occupied.has(key)) return null;
+                if (!key || occupied.has(key)) continue;
                 const spec = decodedSpecs.get(key);
-                if (!specIsReady(spec, exceptSlot)) return null;
-                const bagIndex = bag.findIndex((entry) => photoKey(entry) === key);
-                if (bagIndex >= 0) bag.splice(bagIndex, 1);
+                if (!specIsReady(spec, exceptSlot)) continue;
+                bag.splice(i, 1);
                 reserved.add(key);
                 touchDecoded(key);
-                occupied.add(key);
                 return spec;
-            };
-            for (let i = 0; i < bag.length; i += 1) {
-                const spec = take(bag[i]);
-                if (spec) return spec;
-            }
-            for (const spec of decodedSpecs.values()) {
-                const ready = take(spec);
-                if (ready) return ready;
             }
             return null;
         };
@@ -875,6 +940,12 @@ function Clothing() {
         };
 
         const applyVisuals = (slot, spec) => {
+            const prev = photoKey(slot.spec);
+            const next = photoKey(spec);
+            if (next && next !== prev) {
+                markShown(spec);
+                noteShown(spec);
+            }
             slot.spec = spec;
             slot.aspectRatio = spec.aspectRatio || 1;
             slot.width = itemHeight * slot.aspectRatio;
@@ -984,8 +1055,55 @@ function Clothing() {
                 wrapSlot(slot, slot.spec);
                 return;
             }
-            wrapSlot(slot, pickFillSpec(slot) || slot.spec);
+            const spec = dealUniqueSpec(slot);
+            if (spec) {
+                noteDeal(photoKey(spec), false);
+                wrapSlot(slot, spec);
+                if (!slotHasLoadedPhoto(slot)) {
+                    decodeOntoSlot(slot, libraryByKey.get(photoKey(spec)) || spec);
+                }
+            } else {
+                wrapSlot(slot, slot.spec);
+            }
             pumpSmalls();
+        };
+
+        const ensureReadyBeforeVisible = (slot) => {
+            if (slotHasLoadedPhoto(slot) || slot.frozen) return;
+            const right = slot.x + slot.width;
+            if (right > 0 || right < -180) return;
+            const ready = takeReadySpec(slot);
+            if (!ready) return;
+            const prevWidth = slot.width;
+            releaseReserved(slot.spec);
+            applyVisuals(slot, ready);
+            releaseReserved(ready);
+            if (Math.abs(slot.width - prevWidth) > 0.5) packRow(slot.row);
+            paint(slot);
+        };
+
+        const warnOnScreenDuplicates = () => {
+            if (!photoStats) return;
+            const counts = new Map();
+            pool.forEach((slot) => {
+                if (!slot.spec || slot.x >= viewportWidth) return;
+                const key = photoKey(slot.spec);
+                if (!key) return;
+                counts.set(key, (counts.get(key) || 0) + 1);
+            });
+            let extras = 0;
+            counts.forEach((count, key) => {
+                if (count < 2) {
+                    if (photoStats.dupWarned) photoStats.dupWarned.delete(key);
+                    return;
+                }
+                extras += count - 1;
+                if (!photoStats.dupWarned) photoStats.dupWarned = new Set();
+                if (photoStats.dupWarned.has(key)) return;
+                photoStats.dupWarned.add(key);
+                console.warn('[photos] duplicate on screen:', photoNumberInPath(key), 'x' + count);
+            });
+            photoStats.duplicates = extras;
         };
 
         const warmLarge = (spec) => {
@@ -1049,39 +1167,39 @@ function Clothing() {
             for (let index = first; index <= ahead; index += 1) {
                 (rowAssignments.get(index) || []).forEach(add);
             }
-            peekUpcoming(photosPerRow() * lookaheadRows() + READY_POOL_MIN).forEach(add);
+            peekUpcoming(photosPerRow() * lookaheadRows() + readyPoolMin()).forEach(add);
             return pending;
         };
 
         let smallPump = null;
         const pumpSmalls = () => {
             const pending = collectDecodeQueue();
-            const needReady = readyPoolCount() < READY_POOL_MIN;
+            const needReady = readyPoolCount() < readyPoolMin();
             if ((!pending.length && !needReady) || smallPump) {
                 if (!pending.length && smallsInFlight === 0 && !needReady) prefetchUpcomingLarge();
                 return;
             }
             if (needReady && !bag.length) refillBag();
             const extras = needReady && !pending.length
-                ? peekUpcoming(READY_POOL_MIN).filter((item) => {
+                ? peekUpcoming(readyPoolMin()).filter((item) => {
                     const key = photoKey(item);
                     return key && !decodedSpecs.has(key) && !decodePromises.has(key);
                 })
                 : pending;
             if (!extras.length) {
-                if (smallsInFlight === 0 && readyPoolCount() >= READY_POOL_MIN) prefetchUpcomingLarge();
+                if (smallsInFlight === 0 && readyPoolCount() >= readyPoolMin()) prefetchUpcomingLarge();
                 return;
             }
             smallPump = mapWithConcurrency(extras, DECODE_CONCURRENCY, decodeSmall).finally(() => {
                 smallPump = null;
-                if (collectDecodeQueue().length || readyPoolCount() < READY_POOL_MIN) pumpSmalls();
+                if (collectDecodeQueue().length || readyPoolCount() < readyPoolMin()) pumpSmalls();
                 else if (smallsInFlight === 0) prefetchUpcomingLarge();
             });
         };
 
         let backgroundLarges = 0;
         const prefetchUpcomingLarge = () => {
-            if (smallsInFlight > 0 || collectDecodeQueue().length || readyPoolCount() < READY_POOL_MIN) {
+            if (smallsInFlight > 0 || collectDecodeQueue().length || readyPoolCount() < readyPoolMin()) {
                 return Promise.resolve();
             }
             const room = 6 - backgroundLarges;
@@ -1680,7 +1798,6 @@ function Clothing() {
                     swayPhase: hash01(rowIndex * 50 + i) * Math.PI * 2,
                 };
                 bindItem(slot);
-                if (spec?.img && spec.img.parentNode) spec = cloneReadySpec(spec);
                 applyVisuals(slot, spec);
                 slot.speed = speedFor(slot.id);
                 applyDepth(slot);
@@ -1748,7 +1865,7 @@ function Clothing() {
 
         const appendSlotToRow = (rowIndex, spec, side) => {
             const rowEl = rows[rowIndex];
-            if (!rowEl || !spec) return;
+            if (!rowEl || !spec) return null;
             const index = pool.filter((slot) => slot.row === rowIndex).length;
             const el = document.createElement('div');
             rowEl.appendChild(el);
@@ -1782,24 +1899,14 @@ function Clothing() {
             }
             paint(slot);
             pool.push(slot);
-            markShown(slot.spec);
             releaseReserved(slot.spec);
+            return slot;
         };
 
         const fillRowToCover = async (rowIndex, mode) => {
             for (let n = 0; n < 80 && rowNeedsCoverage(rowIndex, mode); n += 1) {
-                let spec = pickFillSpec();
-                if (!spec?.img) {
-                    const raw = dealRaw() || STREAM_LIBRARY[n % STREAM_LIBRARY.length];
-                    if (raw) spec = await decodeSmall(raw);
-                }
-                if (!spec?.img) spec = pickFillSpec();
-                if (!spec?.img) {
-                    const any = pool.find((slot) => slot.spec?.img?.naturalWidth);
-                    if (any) spec = cloneReadySpec(any.spec);
-                }
-                if (!spec?.img) break;
-                if (imgOwnedByOtherSlot(spec.img, null)) spec = cloneReadySpec(spec);
+                const spec = dealUniqueSpec();
+                if (!spec) break;
                 const mine = pool.filter((slot) => slot.row === rowIndex);
                 const maxX = mine.length ? Math.max(...mine.map((slot) => slot.x + slot.width)) : 0;
                 const minX = mine.length ? Math.min(...mine.map((slot) => slot.x)) : 0;
@@ -1807,7 +1914,10 @@ function Clothing() {
                     mode === 'enter-left' || (maxX >= viewportWidth + itemHeight && minX > -itemHeight)
                         ? 'left'
                         : 'right';
-                appendSlotToRow(rowIndex, spec, side);
+                const slot = appendSlotToRow(rowIndex, spec, side);
+                if (slot && !slotHasLoadedPhoto(slot)) {
+                    decodeOntoSlot(slot, libraryByKey.get(photoKey(spec)) || spec);
+                }
             }
             packRow(rowIndex, mode === 'enter-left');
         };
@@ -1816,8 +1926,13 @@ function Clothing() {
             if (rowAssignments.has(rowIndex)) return rowAssignments.get(rowIndex);
             const raws = [];
             const count = photosPerRow();
+            const used = new Set();
             for (let i = 0; i < count; i += 1) {
-                raws.push(dealRaw() || STREAM_LIBRARY[i % STREAM_LIBRARY.length]);
+                const raw = dealRaw();
+                const key = photoKey(raw);
+                if (!raw || !key || used.has(key)) continue;
+                used.add(key);
+                raws.push(raw);
             }
             rowAssignments.set(rowIndex, raws);
             return raws;
@@ -1836,9 +1951,16 @@ function Clothing() {
                     startedRows.delete(rowIndex);
                     return;
                 }
-                const specs = (decoded || []).filter((spec) => spec?.img);
+                const specs = [];
+                const used = new Set();
+                (decoded || []).forEach((spec) => {
+                    const key = photoKey(spec);
+                    if (!key || used.has(key)) return;
+                    used.add(key);
+                    specs.push(spec);
+                });
                 while (specs.length < raws.length) {
-                    const extra = pickFillSpec();
+                    const extra = dealUniqueSpec();
                     if (!extra) break;
                     specs.push(extra);
                 }
@@ -1861,6 +1983,10 @@ function Clothing() {
                 if (mode !== 'enter-left') rowEl.style.visibility = 'hidden';
                 populateRow(rowIndex, specs, mode);
                 await fillRowToCover(rowIndex, mode);
+                pool.forEach((slot) => {
+                    if (slot.row !== rowIndex || slotHasLoadedPhoto(slot)) return;
+                    decodeOntoSlot(slot, libraryByKey.get(photoKey(slot.spec)) || slot.spec);
+                });
                 const mine = pool.filter((slot) => slot.row === rowIndex);
                 if (holdMotion) {
                     mine.forEach((slot) => {
@@ -1924,6 +2050,7 @@ function Clothing() {
             rows[index] = null;
             startedRows.delete(index);
             introPlan.delete(index);
+            rowAssignments.delete(index);
         };
 
         const ensureRow = (index, mode) => {
@@ -2111,6 +2238,7 @@ function Clothing() {
                         recycle(slot);
                         continue;
                     }
+                    ensureReadyBeforeVisible(slot);
                     const rowHidden = rows[slot.row]?.dataset.opacity === '0';
                     if (!rowHidden || slotIsHeld(slot)) paint(slot);
                 }
@@ -2120,8 +2248,11 @@ function Clothing() {
 
             advanceViewer(now, dt);
             if (fineHover) syncHover();
-            if (process.env.NODE_ENV !== 'production') warnEmptyVisibleTiles();
-            if (readyPoolCount() < READY_POOL_MIN) pumpSmalls();
+            if (process.env.NODE_ENV !== 'production') {
+                warnEmptyVisibleTiles();
+                warnOnScreenDuplicates();
+            }
+            if (readyPoolCount() < readyPoolMin()) pumpSmalls();
 
             if (running) rafId = requestAnimationFrame(tick);
         };
