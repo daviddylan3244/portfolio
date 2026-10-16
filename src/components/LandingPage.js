@@ -6,10 +6,12 @@ const SCRAMBLE_CHARS = '!<>-_\\/[]{}=+*^?#$%&@ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567
 
 const SITE_VERSION = 'v0.9.4';
 
-// Frames each character spends scrambling before it locks into place.
-const CHARS_PER_FRAME = 0.42;
-const MIN_SCRAMBLE_FRAMES = 13;
-const EXTRA_SCRAMBLE_FRAMES = 19;
+// Timing matches the old 60fps frame counts: characters started every
+// 1/0.42 frames (~40ms) and locked after 13 + 0–18 frames (~217–517ms).
+const FRAME_MS = 1000 / 60;
+const CHAR_START_INTERVAL_MS = FRAME_MS / 0.42;
+const MIN_SCRAMBLE_MS = 13 * FRAME_MS;
+const EXTRA_SCRAMBLE_MS = 18 * FRAME_MS;
 
 function randomScrambleChar() {
   return SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
@@ -28,20 +30,18 @@ function useDecryptedText(text, { animate, delay = 0, onComplete }) {
     }
 
     const queue = text.split('').map((char, index) => {
-      const start = Math.floor(index / CHARS_PER_FRAME);
+      const start = index * CHAR_START_INTERVAL_MS;
       return {
         char,
         start,
-        end:
-          start +
-          MIN_SCRAMBLE_FRAMES +
-          Math.floor(Math.random() * EXTRA_SCRAMBLE_FRAMES),
+        end: start + MIN_SCRAMBLE_MS + Math.random() * EXTRA_SCRAMBLE_MS,
       };
     });
 
-    let frame = 0;
     let rafId;
     let finished = false;
+    let lastOutput = '';
+    let startedAt = 0;
 
     const finish = () => {
       if (finished) return;
@@ -49,33 +49,37 @@ function useDecryptedText(text, { animate, delay = 0, onComplete }) {
       onCompleteRef.current?.();
     };
 
-    const tick = () => {
+    const tick = (now) => {
+      const elapsed = now - startedAt;
       let settled = 0;
 
       const output = queue
         .map(({ char, start, end }) => {
-          if (frame >= end) {
+          if (elapsed >= end) {
             settled += 1;
             return char;
           }
-          if (frame >= start) {
+          if (elapsed >= start) {
             return char === ' ' ? ' ' : randomScrambleChar();
           }
           return '';
         })
         .join('');
 
-      setDisplay(output);
+      if (output !== lastOutput) {
+        lastOutput = output;
+        setDisplay(output);
+      }
 
       if (settled === queue.length) {
         finish();
         return;
       }
-      frame += 1;
       rafId = requestAnimationFrame(tick);
     };
 
     const timeoutId = setTimeout(() => {
+      startedAt = performance.now();
       rafId = requestAnimationFrame(tick);
     }, delay);
 

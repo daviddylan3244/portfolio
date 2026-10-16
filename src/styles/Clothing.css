@@ -79,7 +79,6 @@
     background: none;
     box-shadow: none;
     overflow: visible;
-    will-change: transform;
     pointer-events: auto;
     cursor: pointer;
     outline-style: solid;
@@ -92,12 +91,6 @@
     outline-color: #FFFFFF;
 }
 
-@media (max-width: 768px) {
-    .stream-item {
-        will-change: auto;
-    }
-}
-
 .stream-item img {
     display: block;
     height: 100%;
@@ -108,6 +101,7 @@
     pointer-events: none;
     border-radius: 0;
     box-shadow: none;
+    image-orientation: from-image;
 }
 
 .stream-item:focus-visible {
@@ -207,7 +201,6 @@
 
 @media (prefers-reduced-motion: reduce) {
     .stream-item {
-        will-change: auto;
         transition: none;
     }
 

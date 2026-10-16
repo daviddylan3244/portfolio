@@ -6,7 +6,8 @@ import '../styles/Clothing.css';
 // ---------------------------------------------------------------------------
 // Tuning
 // ---------------------------------------------------------------------------
-const CROSSING_TIME_SECONDS = 14;
+// Desktop at 1440px used (1440 + 120) / 14 px/s at a 120px row height.
+const ROW_SPEED_HEIGHTS_PER_SECOND = (1440 + 120) / 14 / 120;
 const ROW_BUFFER = 1;
 
 // clamp(ITEM_HEIGHT_MIN_PX, ITEM_HEIGHT_VW * 1vw, ITEM_HEIGHT_MAX_PX)
@@ -17,20 +18,20 @@ const ITEM_HEIGHT_MAX_PX = 120;
 const ITEM_GAP_PX = 40;
 const VERTICAL_GAP_RATIO = 0.5; // gap between rows, as a fraction of item height
 
-// First row (the middle one on screen) starts after this delay.
-const INTRO_FIRST_DELAY_SECONDS = 1.0;
+// First row (the middle one on screen) starts as soon as its images are ready.
+const INTRO_FIRST_DELAY_SECONDS = 0.0;
 // Random wait between row starts. Never shorter than the minimum.
 const INTRO_MIN_GAP_SECONDS = 0.3;
 const INTRO_MAX_GAP_SECONDS = 2.0;
-// The last on-screen row aims to start at this time.
-const INTRO_TARGET_SECONDS = 7.0;
+// The last intro row aims to start at this time.
+const INTRO_TARGET_SECONDS = 6.0;
 const INTRO_PLAY_ONCE_PER_VISIT = true;
 const INTRO_STORAGE_KEY = 'clothing-intro-played';
 
 // Used only if sessionStorage is unavailable.
 let introPlayedThisVisit = false;
 
-const MAX_FRAME_SECONDS = 1 / 30;
+const MAX_FRAME_SECONDS = 0.1;
 
 // Future: each item's speed = baseSpeed * (1 ± this). 0.25 => about ±25%.
 const SPEED_VARIATION = 0;
@@ -49,8 +50,14 @@ const MOBILE_BREAKPOINT_PX = 768;
 const DESKTOP_POOL_BUFFER = 2;
 const MOBILE_POOL_BUFFER = 0;
 const MOBILE_ROW_BUFFER = 2;
-const MOBILE_OPEN_SPEED = 0.45;
-const DECODE_CONCURRENCY = 3;
+const DECODE_CONCURRENCY = 4;
+const LOOKAHEAD_SCREENS = 2;
+const FAST_SCROLL_SCREENS = 4;
+const FAST_SCROLL_PX_PER_SEC = 1400;
+const DECODED_CACHE_LIMIT = 160;
+const READY_POOL_MIN = 24;
+const HEIGHT_CHUNK_ROWS = 20;
+const LARGE_HOVER_DELAY_MS = 350;
 
 // Click-to-open viewer
 const OPEN_TRANSITION_MS = 700;
@@ -268,58 +275,152 @@ function markIntroPlayed() {
     }
 }
 
-function decodeElements(root) {
-    const images = [...root.querySelectorAll('img')];
-    return Promise.all(
-        images.map((img) =>
-            typeof img.decode === 'function' ? img.decode().catch(() => {}) : Promise.resolve()
-        )
-    );
+function readJpegMeta(buffer) {
+    const data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) {
+        return { width: 0, height: 0, orientation: 1 };
+    }
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let i = 2;
+    let width = 0;
+    let height = 0;
+    let orientation = 1;
+    while (i < data.length - 8) {
+        if (data[i] !== 0xff) {
+            i += 1;
+            continue;
+        }
+        const marker = data[i + 1];
+        if (marker === 0xda) break;
+        if (marker === 0xd8 || marker === 0xd9) {
+            i += 2;
+            continue;
+        }
+        const seglen = view.getUint16(i + 2);
+        if (marker >= 0xc0 && marker <= 0xc3 && seglen >= 7) {
+            height = view.getUint16(i + 5);
+            width = view.getUint16(i + 7);
+        }
+        if (marker === 0xe1 && seglen > 14) {
+            const isExif =
+                data[i + 4] === 0x45 &&
+                data[i + 5] === 0x78 &&
+                data[i + 6] === 0x69 &&
+                data[i + 7] === 0x66;
+            if (isExif) {
+                const tiffStart = i + 10;
+                const little = data[tiffStart] === 0x49;
+                const ru16 = (offset) => view.getUint16(offset, little);
+                const ru32 = (offset) => view.getUint32(offset, little);
+                const if0 = tiffStart + ru32(tiffStart + 4);
+                if (if0 + 2 < data.length) {
+                    const count = ru16(if0);
+                    for (let k = 0; k < count; k += 1) {
+                        const off = if0 + 2 + k * 12;
+                        if (off + 12 > data.length) break;
+                        if (ru16(off) === 0x0112) orientation = ru16(off + 8);
+                    }
+                }
+            }
+        }
+        i += 2 + seglen;
+    }
+    return { width, height, orientation };
 }
 
-function decodeSmallImage(item) {
-    if (!item.src) {
-        return Promise.resolve({ ...item, aspectRatio: item.aspectRatio || 1 });
+function orientedJpegSize(meta) {
+    const swap = meta.orientation >= 5 && meta.orientation <= 8;
+    return swap
+        ? { width: meta.height, height: meta.width }
+        : { width: meta.width, height: meta.height };
+}
+
+function imgFromBlob(blob) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.draggable = false;
+    img.decoding = 'async';
+    const objectUrl = URL.createObjectURL(blob);
+    img.src = objectUrl;
+    const decoded =
+        typeof img.decode === 'function'
+            ? img.decode().catch(() => {})
+            : new Promise((resolve) => {
+                  img.onload = resolve;
+                  img.onerror = resolve;
+              });
+    return decoded.then(() => ({ img, objectUrl }));
+}
+
+async function bakeOrientedBlob(blob, meta) {
+    if (!meta || meta.orientation <= 1 || typeof createImageBitmap !== 'function') {
+        return blob;
     }
+    try {
+        const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+        const storedMatches =
+            bitmap.width === meta.width && bitmap.height === meta.height;
+        if (storedMatches) {
+            bitmap.close();
+            return blob;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
+        bitmap.close();
+        const baked = await new Promise((resolve) => {
+            canvas.toBlob((next) => resolve(next || blob), 'image/jpeg', 0.95);
+        });
+        return baked;
+    } catch (err) {
+        return blob;
+    }
+}
 
-    return new Promise((resolve) => {
-        const image = new Image();
-        const finish = (ratio) => {
-            resolve({ ...item, aspectRatio: ratio || 1 });
-        };
-
-        image.onload = () => {
-            const ratio =
-                image.naturalWidth && image.naturalHeight
-                    ? image.naturalWidth / image.naturalHeight
-                    : 1;
-            if (typeof image.decode === 'function') {
-                image
-                    .decode()
-                    .then(() => finish(ratio))
-                    .catch(() => finish(ratio));
-            } else {
-                finish(ratio);
-            }
-        };
-        image.onerror = () => finish(1);
-        image.src = encodeURI(item.src);
-    });
+async function loadDecodedImage(src, options = {}) {
+    if (!src) {
+        return { img: null, objectUrl: '', aspectRatio: 1, src };
+    }
+    const fetchOptions = options.priority ? { priority: options.priority } : {};
+    const response = await fetch(encodeURI(src), fetchOptions);
+    const buffer = await response.arrayBuffer();
+    const meta = readJpegMeta(buffer);
+    const oriented = orientedJpegSize(meta);
+    const original = new Blob([buffer], { type: 'image/jpeg' });
+    const blob = await bakeOrientedBlob(original, meta);
+    const loaded = await imgFromBlob(blob);
+    const width = loaded.img.naturalWidth || oriented.width || 1;
+    const height = loaded.img.naturalHeight || oriented.height || 1;
+    let aspectRatio = width / height;
+    if (
+        blob === original &&
+        meta.orientation >= 5 &&
+        meta.orientation <= 8 &&
+        oriented.width &&
+        oriented.height
+    ) {
+        aspectRatio = oriented.width / oriented.height;
+        loaded.img.style.imageOrientation = 'from-image';
+    }
+    return { ...loaded, aspectRatio, src };
 }
 
 async function mapWithConcurrency(items, concurrency, fn) {
     let cursor = 0;
+    const results = new Array(items.length);
     const worker = async () => {
         while (cursor < items.length) {
             const index = cursor;
             cursor += 1;
-            await fn(items[index]);
+            results[index] = await fn(items[index]);
         }
     };
     const workers = [];
     const count = Math.max(1, Math.min(concurrency, items.length));
     for (let i = 0; i < count; i += 1) workers.push(worker());
     await Promise.all(workers);
+    return results;
 }
 
 function Clothing() {
@@ -340,11 +441,23 @@ function Clothing() {
         const pool = [];
         const decodePromises = new Map();
         const decodedSpecs = new Map();
+        const decodedOrder = [];
         const introTimers = [];
         const startedRows = new Set();
-        let deck = shuffle(STREAM_LIBRARY);
-        let deckCursor = 0;
+        const rowAssignments = new Map();
+        const libraryByKey = new Map(
+            STREAM_LIBRARY.map((item) => [item.src || item.id, item])
+        );
+        let bag = [];
+        const shownKeys = [];
         const reserved = new Set();
+        const spareRows = [];
+        let allocatedRows = 0;
+        let smallsInFlight = 0;
+        let lastIntroStartAt = -INTRO_MIN_GAP_SECONDS;
+        let lastScrollY = 0;
+        let lastScrollT = 0;
+        let scrollSpeed = 0;
         let rafId = 0;
         let running = false;
         let inView = true;
@@ -427,7 +540,7 @@ function Clothing() {
         const applyLayoutMetrics = () => {
             viewportWidth = section.clientWidth || window.innerWidth;
             itemHeight = clampItemHeight(window.innerWidth);
-            baseSpeed = (viewportWidth + itemHeight) / CROSSING_TIME_SECONDS;
+            baseSpeed = itemHeight * ROW_SPEED_HEIGHTS_PER_SECOND;
             section.style.setProperty('--stream-item-height', `${itemHeight}px`);
             section.style.setProperty(
                 '--stream-row-gap',
@@ -526,30 +639,73 @@ function Clothing() {
             );
         };
 
+        const photoKey = (item) => (item && (item.src || item.id)) || '';
+
+        const touchDecoded = (key) => {
+            const index = decodedOrder.indexOf(key);
+            if (index >= 0) decodedOrder.splice(index, 1);
+            decodedOrder.push(key);
+        };
+
+        const trimDecodedCache = () => {
+            const live = occupiedKeys();
+            const floor = live.size + READY_POOL_MIN;
+            const limit = Math.max(DECODED_CACHE_LIMIT, floor);
+            while (decodedSpecs.size > limit) {
+                const victim = decodedOrder.find((key) => {
+                    if (live.has(key)) return false;
+                    const spec = decodedSpecs.get(key);
+                    if (spec?.img && spec.img.parentNode) return false;
+                    return true;
+                });
+                if (!victim) break;
+                const spec = decodedSpecs.get(victim);
+                if (spec?.objectUrl) URL.revokeObjectURL(spec.objectUrl);
+                decodedSpecs.delete(victim);
+                const orderIndex = decodedOrder.indexOf(victim);
+                if (orderIndex >= 0) decodedOrder.splice(orderIndex, 1);
+            }
+        };
+
         const decodeSmall = (item) => {
-            const key = item.src || item.id;
-            if (decodedSpecs.has(key)) return Promise.resolve(decodedSpecs.get(key));
+            if (!item) return Promise.resolve(null);
+            const key = photoKey(item);
+            if (!key) return Promise.resolve(null);
+            if (decodedSpecs.has(key)) {
+                touchDecoded(key);
+                return Promise.resolve(decodedSpecs.get(key));
+            }
             if (!decodePromises.has(key)) {
+                smallsInFlight += 1;
                 decodePromises.set(
                     key,
-                    decodeSmallImage(item).then((resolved) => {
-                        decodedSpecs.set(key, resolved);
-                        return resolved;
-                    })
+                    loadDecodedImage(item.src, { priority: 'high' })
+                        .then((loaded) => {
+                            const spec = {
+                                ...item,
+                                aspectRatio: loaded.aspectRatio || 1,
+                                img: loaded.img,
+                                objectUrl: loaded.objectUrl,
+                            };
+                            decodedSpecs.set(key, spec);
+                            touchDecoded(key);
+                            trimDecodedCache();
+                            return spec;
+                        })
+                        .catch(() => {
+                            const spec = { ...item, aspectRatio: item.aspectRatio || 1, img: null };
+                            decodedSpecs.set(key, spec);
+                            return spec;
+                        })
+                        .finally(() => {
+                            smallsInFlight = Math.max(0, smallsInFlight - 1);
+                        })
                 );
             }
             return decodePromises.get(key);
         };
 
-        const photoKey = (item) => (item && (item.src || item.id)) || '';
-
-        const photosPerRow = () => {
-            const { first, last } = visibleBounds();
-            const capacity = Math.max(1, last - first + 1 + ROW_BUFFER * 2);
-            const wanted = computePerRow();
-            const maxEven = Math.max(1, Math.floor(STREAM_LIBRARY.length / capacity));
-            return Math.min(wanted, maxEven);
-        };
+        const photosPerRow = () => computePerRow();
 
         const occupiedKeys = (exceptSlot) => {
             const keys = new Set();
@@ -567,41 +723,150 @@ function Clothing() {
             return keys;
         };
 
-        const refillDeck = () => {
-            deck = shuffle(STREAM_LIBRARY);
-            deckCursor = 0;
+        const refillBag = () => {
+            const occupied = occupiedKeys();
+            const recent = [];
+            const seen = new Set();
+            for (let i = shownKeys.length - 1; i >= 0 && recent.length < STREAM_LIBRARY.length; i -= 1) {
+                const key = shownKeys[i];
+                if (!key || seen.has(key) || occupied.has(key)) continue;
+                seen.add(key);
+                recent.push(key);
+            }
+            recent.reverse();
+            const recentSet = new Set(recent);
+            const rest = STREAM_LIBRARY.filter((item) => {
+                const key = photoKey(item);
+                return key && !occupied.has(key) && !recentSet.has(key);
+            });
+            bag = [
+                ...shuffle(rest),
+                ...recent.map((key) => libraryByKey.get(key)).filter(Boolean),
+            ];
         };
 
-        const nextRawItem = (exceptSlot) => {
+        const dealRaw = (exceptSlot) => {
             const occupied = occupiedKeys(exceptSlot);
             if (exceptSlot?.spec) occupied.add(photoKey(exceptSlot.spec));
             for (let pass = 0; pass < 2; pass += 1) {
-                while (deckCursor < deck.length) {
-                    const item = deck[deckCursor];
-                    deckCursor += 1;
+                if (!bag.length) refillBag();
+                while (bag.length) {
+                    const item = bag.shift();
                     const key = photoKey(item);
                     if (!key || occupied.has(key)) continue;
                     reserved.add(key);
                     return item;
                 }
-                if (pass === 0) refillDeck();
             }
             return null;
+        };
+
+        const imgOwnedByOtherSlot = (img, exceptSlot) => {
+            if (!img || !img.parentNode) return false;
+            for (let i = 0; i < pool.length; i += 1) {
+                const other = pool[i];
+                if (other === exceptSlot) continue;
+                if (other.el === img.parentNode) return true;
+            }
+            return false;
+        };
+
+        const specIsReady = (spec, exceptSlot) =>
+            !!(spec?.img && spec.img.naturalWidth && !imgOwnedByOtherSlot(spec.img, exceptSlot));
+
+        const slotHasLoadedPhoto = (slot) => {
+            if (!slot?.spec?.img || !slot.spec.img.naturalWidth) return false;
+            return slot.spec.img.parentNode === slot.el;
+        };
+
+        const cloneReadySpec = (spec) => {
+            if (!spec?.img) return spec;
+            const img = spec.img.cloneNode(true);
+            img.alt = '';
+            img.draggable = false;
+            return { ...spec, img };
+        };
+
+        const pickFillSpec = (exceptSlot) => {
+            const unique = takeReadySpec(exceptSlot);
+            if (unique) return unique;
+            const visible = new Set();
+            pool.forEach((slot) => {
+                if (slot === exceptSlot || !slot.spec) return;
+                if (slot.x + slot.width > 0 && slot.x < viewportWidth) {
+                    visible.add(photoKey(slot.spec));
+                }
+            });
+            let duplicate = null;
+            decodedSpecs.forEach((spec) => {
+                if (duplicate || !spec?.img?.naturalWidth) return;
+                const owned = imgOwnedByOtherSlot(spec.img, exceptSlot);
+                const candidate = owned ? cloneReadySpec(spec) : spec;
+                if (!visible.has(photoKey(spec))) {
+                    duplicate = candidate;
+                    return;
+                }
+                if (!duplicate) duplicate = candidate;
+            });
+            return duplicate;
+        };
+
+        const takeReadySpec = (exceptSlot) => {
+            const occupied = occupiedKeys(exceptSlot);
+            if (exceptSlot?.spec) occupied.add(photoKey(exceptSlot.spec));
+            const take = (item) => {
+                const key = photoKey(item);
+                if (!key || occupied.has(key)) return null;
+                const spec = decodedSpecs.get(key);
+                if (!specIsReady(spec, exceptSlot)) return null;
+                const bagIndex = bag.findIndex((entry) => photoKey(entry) === key);
+                if (bagIndex >= 0) bag.splice(bagIndex, 1);
+                reserved.add(key);
+                touchDecoded(key);
+                occupied.add(key);
+                return spec;
+            };
+            for (let i = 0; i < bag.length; i += 1) {
+                const spec = take(bag[i]);
+                if (spec) return spec;
+            }
+            for (const spec of decodedSpecs.values()) {
+                const ready = take(spec);
+                if (ready) return ready;
+            }
+            return null;
+        };
+
+        const readyPoolCount = () => {
+            const occupied = occupiedKeys();
+            let count = 0;
+            decodedSpecs.forEach((spec, key) => {
+                if (occupied.has(key)) return;
+                if (specIsReady(spec, null)) count += 1;
+            });
+            return count;
         };
 
         const peekUpcoming = (count) => {
             const occupied = occupiedKeys(null);
             const upcoming = [];
-            let index = deckCursor;
-            while (index < deck.length && upcoming.length < count) {
-                const item = deck[index];
-                index += 1;
+            for (let i = 0; i < bag.length && upcoming.length < count; i += 1) {
+                const item = bag[i];
                 const key = photoKey(item);
                 if (!key || occupied.has(key)) continue;
                 occupied.add(key);
                 upcoming.push(item);
             }
             return upcoming;
+        };
+
+        const markShown = (spec) => {
+            const key = photoKey(spec);
+            if (!key) return;
+            shownKeys.push(key);
+            if (shownKeys.length > STREAM_LIBRARY.length * 3) {
+                shownKeys.splice(0, shownKeys.length - STREAM_LIBRARY.length);
+            }
         };
 
         const releaseReserved = (spec) => {
@@ -616,20 +881,11 @@ function Clothing() {
             slot.el.style.width = `${slot.width}px`;
             slot.el.style.height = `${itemHeight}px`;
             slot.el.style.backgroundImage = 'none';
-
-            let photo = slot.el.querySelector('img');
-            if (spec.src) {
-                if (!photo) {
-                    photo = document.createElement('img');
-                    photo.alt = '';
-                    photo.draggable = false;
-                    slot.el.appendChild(photo);
-                }
-                photo.src = encodeURI(spec.src);
-                slot.el.style.backgroundColor = 'transparent';
-            } else {
-                if (photo) photo.remove();
-                slot.el.style.backgroundColor = spec.color;
+            slot.el.style.backgroundColor = spec.src ? 'transparent' : spec.color;
+            if (spec.img && !imgOwnedByOtherSlot(spec.img, slot)) {
+                if (spec.img.parentNode !== slot.el) slot.el.replaceChildren(spec.img);
+            } else if (!slot.el.querySelector('img')) {
+                slot.el.replaceChildren();
             }
         };
 
@@ -671,6 +927,18 @@ function Clothing() {
             slot.el.style.opacity = String(opacity);
         };
 
+        const revealSlot = (slot) => {
+            if (!slot) return;
+            slot.paintedOpacity = 1;
+            slot.el.style.opacity = '1';
+            if (slotHasLoadedPhoto(slot)) slot._emptyWarned = false;
+            if (slot.el.classList.contains('is-hovered') && !slotHasLoadedPhoto(slot)) {
+                slot.el.classList.remove('is-hovered');
+                if (hoverSlot === slot) hoverSlot = null;
+            }
+            paint(slot);
+        };
+
         const leftmostInRow = (rowIndex, except) => {
             let leftmost = null;
             for (let i = 0; i < pool.length; i += 1) {
@@ -694,43 +962,30 @@ function Clothing() {
             return decodedSpecs.get(libraryItem.src || libraryItem.id) || { ...libraryItem };
         };
 
-        const recycle = (slot) => {
-            if (slot.frozen || slotIsHeld(slot)) return;
-            const raw = nextRawItem(slot);
-            if (!raw) {
-                const index = pool.indexOf(slot);
-                if (index >= 0) pool.splice(index, 1);
-                if (slot === hoverSlot) hoverSlot = null;
-                slot.el.remove();
-                return;
+        const wrapSlot = (slot, spec) => {
+            if (slot === hoverSlot) {
+                slot.el.classList.remove('is-hovered');
+                hoverSlot = null;
             }
-            const place = (spec) => {
-                if (cancelled || !slot.el.isConnected) return;
-                if (slot === hoverSlot) {
-                    slot.el.classList.remove('is-hovered');
-                    hoverSlot = null;
-                }
-                if (slotIsHeld(slot)) {
-                    releaseReserved(spec);
-                    slot.frozen = false;
-                    return;
-                }
-                const neighbor = leftmostInRow(slot.row, slot);
+            if (spec && spec !== slot.spec) {
+                markShown(slot.spec);
+                releaseReserved(slot.spec);
                 applyVisuals(slot, spec);
                 releaseReserved(spec);
-                slot.frozen = false;
-                slot.x = neighbor
-                    ? neighbor.x - slot.width - ITEM_GAP_PX
-                    : -slot.width;
-                paint(slot);
-            };
-            const cached = decodedSpecs.get(raw.src || raw.id);
-            if (cached) {
-                place(cached);
-            } else {
-                slot.frozen = true;
-                decodeSmall(raw).then(place);
             }
+            const neighbor = leftmostInRow(slot.row, slot);
+            slot.x = neighbor ? neighbor.x - slot.width - ITEM_GAP_PX : -slot.width;
+            paint(slot);
+        };
+
+        const recycle = (slot) => {
+            if (slot.frozen) return;
+            if (slotIsHeld(slot)) {
+                wrapSlot(slot, slot.spec);
+                return;
+            }
+            wrapSlot(slot, pickFillSpec(slot) || slot.spec);
+            pumpSmalls();
         };
 
         const warmLarge = (spec) => {
@@ -739,51 +994,111 @@ function Clothing() {
             if (!largePromises.has(key)) {
                 largePromises.set(
                     key,
-                    new Promise((resolve) => {
-                        const image = new Image();
-                        image.onload = () => {
-                            const done = () => resolve(image);
-                            if (typeof image.decode === 'function') {
-                                image.decode().then(done).catch(done);
-                            } else {
-                                done();
-                            }
-                        };
-                        image.onerror = () => resolve(null);
-                        image.src = encodeURI(spec.srcFull);
-                    })
+                    loadDecodedImage(spec.srcFull, { priority: 'low' })
+                        .then((loaded) => loaded.img)
+                        .catch(() => null)
                 );
             }
             return largePromises.get(key);
         };
 
-        let backgroundLarges = 0;
-        const ensureUpcomingSmalls = () => {
-            const pending = peekUpcoming(photosPerRow()).filter((item) => {
-                const key = item.src || item.id;
-                return key && !decodedSpecs.has(key) && !decodePromises.has(key);
-            });
-            return mapWithConcurrency(pending, DECODE_CONCURRENCY, decodeSmall);
+        const scheduleLarge = (spec, reason) => {
+            if (!spec?.srcFull) return;
+            const start = () => {
+                if (reason !== 'open' && (smallsInFlight > 0 || collectDecodeQueue().length)) return;
+                warmLarge(spec);
+            };
+            if (reason === 'open') {
+                start();
+                return;
+            }
+            if (reason === 'pointerdown') {
+                if (smallsInFlight > 0 || collectDecodeQueue().length) {
+                    window.setTimeout(start, 0);
+                    return;
+                }
+                start();
+                return;
+            }
+            if (typeof requestIdleCallback === 'function') {
+                requestIdleCallback(start, { timeout: 1200 });
+            } else {
+                window.setTimeout(start, 0);
+            }
         };
 
+        const lookaheadRows = () => {
+            const screens =
+                scrollSpeed > FAST_SCROLL_PX_PER_SEC ? FAST_SCROLL_SCREENS : LOOKAHEAD_SCREENS;
+            return Math.max(1, Math.ceil(viewHeight() / Math.max(1, stridePx()))) * screens;
+        };
+
+        const collectDecodeQueue = () => {
+            const pending = [];
+            const seen = new Set();
+            const add = (item) => {
+                const key = photoKey(item);
+                if (!key || seen.has(key) || decodedSpecs.has(key) || decodePromises.has(key)) {
+                    return;
+                }
+                seen.add(key);
+                pending.push(item);
+            };
+            const { first, last } = visibleBounds();
+            const ahead = last + lookaheadRows();
+            for (let index = first; index <= ahead; index += 1) {
+                (rowAssignments.get(index) || []).forEach(add);
+            }
+            peekUpcoming(photosPerRow() * lookaheadRows() + READY_POOL_MIN).forEach(add);
+            return pending;
+        };
+
+        let smallPump = null;
+        const pumpSmalls = () => {
+            const pending = collectDecodeQueue();
+            const needReady = readyPoolCount() < READY_POOL_MIN;
+            if ((!pending.length && !needReady) || smallPump) {
+                if (!pending.length && smallsInFlight === 0 && !needReady) prefetchUpcomingLarge();
+                return;
+            }
+            if (needReady && !bag.length) refillBag();
+            const extras = needReady && !pending.length
+                ? peekUpcoming(READY_POOL_MIN).filter((item) => {
+                    const key = photoKey(item);
+                    return key && !decodedSpecs.has(key) && !decodePromises.has(key);
+                })
+                : pending;
+            if (!extras.length) {
+                if (smallsInFlight === 0 && readyPoolCount() >= READY_POOL_MIN) prefetchUpcomingLarge();
+                return;
+            }
+            smallPump = mapWithConcurrency(extras, DECODE_CONCURRENCY, decodeSmall).finally(() => {
+                smallPump = null;
+                if (collectDecodeQueue().length || readyPoolCount() < READY_POOL_MIN) pumpSmalls();
+                else if (smallsInFlight === 0) prefetchUpcomingLarge();
+            });
+        };
+
+        let backgroundLarges = 0;
         const prefetchUpcomingLarge = () => {
+            if (smallsInFlight > 0 || collectDecodeQueue().length || readyPoolCount() < READY_POOL_MIN) {
+                return Promise.resolve();
+            }
             const room = 6 - backgroundLarges;
             if (room <= 0) return Promise.resolve();
-            const pending = peekUpcoming(room).filter((item) => item.srcFull && !largePromises.has(item.srcFull));
+            const pending = peekUpcoming(room).filter(
+                (item) => item.srcFull && !largePromises.has(item.srcFull)
+            );
             backgroundLarges += pending.length;
-            return mapWithConcurrency(pending, DECODE_CONCURRENCY, warmLarge);
+            return mapWithConcurrency(pending, 1, (item) =>
+                warmLarge(item).finally(() => {
+                    backgroundLarges = Math.max(0, backgroundLarges - 1);
+                })
+            );
         };
 
-        let upcomingTask = null;
-        let prefetchedAhead = false;
         const scheduleUpcoming = () => {
-            if (prefetchedAhead || upcomingTask) return;
-            prefetchedAhead = true;
-            upcomingTask = Promise.all([ensureUpcomingSmalls(), prefetchUpcomingLarge()]).finally(
-                () => {
-                    upcomingTask = null;
-                }
-            );
+            pumpSmalls();
         };
 
         const applyRows = (amount) => {
@@ -794,44 +1109,36 @@ function Clothing() {
                 const framing = index === frameTop || index === frameBottom;
                 const between = index > frameTop && index < frameBottom;
                 const targetOpacity = viewer && between ? 0 : 1;
-                const ty = 0;
-                const scale = 1;
                 const opacity = 1 + (targetOpacity - 1) * amount;
-                const idle =
-                    amount === 0 ||
-                    (Math.abs(ty) < 0.01 && Math.abs(scale - 1) < 0.001);
-                row.style.transformOrigin = 'top center';
-                if (idle) {
-                    row.style.transform = '';
-                } else {
-                    let transform = `translate3d(0, ${ty}px, 0)`;
-                    if (Math.abs(scale - 1) > 0.001) transform += ` scale(${scale})`;
-                    row.style.transform = transform;
+                const opacityStr = String(opacity);
+                if (row.dataset.opacity !== opacityStr) {
+                    row.dataset.opacity = opacityStr;
+                    row.style.opacity = opacityStr;
                 }
-                row.style.opacity = String(opacity);
                 const blocked = opacity < 0.2;
-                if (row.dataset.blocked !== (blocked ? '1' : '0')) {
-                    row.dataset.blocked = blocked ? '1' : '0';
+                const blockedFlag = blocked ? '1' : '0';
+                if (row.dataset.blocked !== blockedFlag) {
+                    row.dataset.blocked = blockedFlag;
                     row.querySelectorAll('.stream-item').forEach((item) => {
                         item.style.pointerEvents = blocked ? 'none' : '';
                     });
                 }
-                if (amount > 0.02 && framing) {
-                    row.style.zIndex = '45';
-                    row.style.pointerEvents = 'none';
-                } else if (blocked) {
-                    row.style.zIndex = '';
-                    row.style.pointerEvents = 'none';
-                } else {
-                    row.style.zIndex = '';
-                    row.style.pointerEvents = '';
+                const zIndex = amount > 0.02 && framing ? '45' : '';
+                if (row.style.zIndex !== zIndex) row.style.zIndex = zIndex;
+                const pointerEvents = blocked ? 'none' : '';
+                if (row.style.pointerEvents !== pointerEvents) {
+                    row.style.pointerEvents = pointerEvents;
                 }
-                rowPose[index] = { ty, scale };
+                rowPose[index] = { ty: 0, scale: 1 };
             });
             section.classList.toggle('is-viewer-open', amount > 0.02);
             if (menuEl) {
-                menuEl.style.opacity = String(1 - amount);
-                menuEl.style.pointerEvents = amount > 0.85 ? 'none' : '';
+                const menuOpacity = String(1 - amount);
+                if (menuEl.style.opacity !== menuOpacity) menuEl.style.opacity = menuOpacity;
+                const menuEvents = amount > 0.85 ? 'none' : '';
+                if (menuEl.style.pointerEvents !== menuEvents) {
+                    menuEl.style.pointerEvents = menuEvents;
+                }
             }
         };
 
@@ -918,19 +1225,16 @@ function Clothing() {
         };
 
         const liveThumb = (slot) => {
-            const base = viewer.rowBases[slot.row];
-            const pose = rowPose[slot.row];
-            if (!base || !pose) {
-                const rect = slot.el.getBoundingClientRect();
-                return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-            }
-            const scale = pose.scale || 1;
-            const originX = base.left + base.width / 2;
+            const scale = slot.scale || 1;
+            const width = slot.width * scale;
+            const height = itemHeight * scale;
+            const originX = streamOriginX - (window.scrollX || window.pageXOffset || 0);
+            const originY = streamOriginY - pageScroll();
             return {
-                left: originX + (slot.x - base.width / 2) * scale,
-                top: base.top + pose.ty,
-                width: slot.width * scale,
-                height: itemHeight * scale,
+                left: originX + slot.x + (slot.width - width) / 2,
+                top: originY + slot.row * stridePx() + (itemHeight - height) / 2,
+                width,
+                height,
             };
         };
 
@@ -979,7 +1283,7 @@ function Clothing() {
             small.style.visibility = 'visible';
             large.style.opacity = '0';
             large.removeAttribute('src');
-            small.src = spec && spec.src ? encodeURI(spec.src) : '';
+            small.src = spec?.objectUrl || (spec?.src ? encodeURI(spec.src) : '');
         };
 
         const showLarge = (node) => {
@@ -997,11 +1301,7 @@ function Clothing() {
                 viewer.largeOpacity = 1;
                 viewer.largeShown = true;
             };
-            const ready = warmLarge(spec).then((image) => {
-                if (!image) return null;
-                if (typeof image.decode !== 'function') return image;
-                return image.decode().then(() => image).catch(() => image);
-            });
+            const ready = warmLarge(spec);
             const waitForOpen = window.innerWidth <= MOBILE_BREAKPOINT_PX
                 && viewer
                 && (viewer.phase === 'opening' || viewer.phase === 'switching');
@@ -1035,9 +1335,9 @@ function Clothing() {
             const departures = viewer.departures;
             const flyer = activeFlyer;
             viewer = null;
-            slot.el.style.opacity = '1';
+            revealSlot(slot);
             departures.forEach((dep) => {
-                dep.slot.el.style.opacity = '1';
+                revealSlot(dep.slot);
                 releaseFlyer(dep.flyer);
             });
             applyRows(0);
@@ -1052,6 +1352,10 @@ function Clothing() {
                 menuEl.style.pointerEvents = '';
             }
             section.classList.remove('is-viewer-open');
+            if (hoverSlot && !slotHasLoadedPhoto(hoverSlot)) {
+                hoverSlot.el.classList.remove('is-hovered');
+                hoverSlot = null;
+            }
             syncPlayback();
         };
 
@@ -1067,7 +1371,7 @@ function Clothing() {
                 dep.slot.el.style.opacity = String(amount);
                 placeNode(dep.flyer, pose);
                 if (amount >= 1) {
-                    dep.slot.el.style.opacity = '1';
+                    revealSlot(dep.slot);
                     releaseFlyer(dep.flyer);
                     return false;
                 }
@@ -1135,8 +1439,8 @@ function Clothing() {
 
             if (viewer.phase === 'closing' && viewer.closeDone) {
                 activeFlyer.root.hidden = true;
-                viewer.slot.el.style.opacity = '1';
                 viewer.thumbOpacity = 1;
+                revealSlot(viewer.slot);
                 if (viewer.departures.length === 0) finishViewer();
             }
         };
@@ -1312,14 +1616,13 @@ function Clothing() {
             el.tabIndex = 0;
             el.setAttribute('role', 'button');
             el.setAttribute('aria-label', 'Open image');
-            const primeLarge = () => warmLarge(slot.spec);
             el.addEventListener('pointerdown', (event) => {
                 if (event.pointerType === 'touch') {
                     slot.tapX = event.clientX;
                     slot.tapY = event.clientY;
                     return;
                 }
-                primeLarge();
+                scheduleLarge(slot.spec, 'pointerdown');
             });
             el.addEventListener('pointerup', (event) => {
                 if (event.pointerType !== 'touch') return;
@@ -1329,7 +1632,17 @@ function Clothing() {
                 slot.openedFromTap = true;
                 activateSlot(slot);
             });
-            el.addEventListener('mouseenter', primeLarge);
+            el.addEventListener('mouseenter', () => {
+                slot.hoverTimer = window.setTimeout(() => {
+                    scheduleLarge(slot.spec, 'hover');
+                }, LARGE_HOVER_DELAY_MS);
+            });
+            el.addEventListener('mouseleave', () => {
+                if (slot.hoverTimer) {
+                    window.clearTimeout(slot.hoverTimer);
+                    slot.hoverTimer = 0;
+                }
+            });
             el.addEventListener('click', (event) => {
                 event.stopPropagation();
                 if (slot.openedFromTap) {
@@ -1367,6 +1680,7 @@ function Clothing() {
                     swayPhase: hash01(rowIndex * 50 + i) * Math.PI * 2,
                 };
                 bindItem(slot);
+                if (spec?.img && spec.img.parentNode) spec = cloneReadySpec(spec);
                 applyVisuals(slot, spec);
                 slot.speed = speedFor(slot.id);
                 applyDepth(slot);
@@ -1380,6 +1694,7 @@ function Clothing() {
                     edge = slot.x - ITEM_GAP_PX;
                     paint(slot);
                     pool.push(slot);
+                    markShown(slot.spec);
                     releaseReserved(slot.spec);
                 });
                 return;
@@ -1395,8 +1710,117 @@ function Clothing() {
                 cursorX += slot.width + ITEM_GAP_PX;
                 paint(slot);
                 pool.push(slot);
+                markShown(slot.spec);
                 releaseReserved(slot.spec);
             });
+        };
+
+        const packRow = (rowIndex, fromRight) => {
+            const mine = pool.filter((slot) => slot.row === rowIndex).sort((a, b) => a.x - b.x);
+            if (fromRight) {
+                for (let i = mine.length - 2; i >= 0; i -= 1) {
+                    mine[i].x = mine[i + 1].x - mine[i].width - ITEM_GAP_PX;
+                    paint(mine[i]);
+                }
+                return;
+            }
+            for (let i = 1; i < mine.length; i += 1) {
+                mine[i].x = mine[i - 1].x + mine[i - 1].width + ITEM_GAP_PX;
+                paint(mine[i]);
+            }
+        };
+
+        const rowNeedsCoverage = (rowIndex, mode) => {
+            const mine = pool.filter((slot) => slot.row === rowIndex);
+            if (!mine.length) return true;
+            let left = mine[0];
+            let right = mine[0];
+            mine.forEach((slot) => {
+                if (slot.x < left.x) left = slot;
+                if (slot.x + slot.width > right.x + right.width) right = slot;
+            });
+            const needed = viewportWidth + left.width + right.width;
+            const span = right.x + right.width - left.x;
+            if (span < needed) return true;
+            if (mode === 'enter-left') return false;
+            return left.x > -left.width || right.x + right.width < viewportWidth + right.width;
+        };
+
+        const appendSlotToRow = (rowIndex, spec, side) => {
+            const rowEl = rows[rowIndex];
+            if (!rowEl || !spec) return;
+            const index = pool.filter((slot) => slot.row === rowIndex).length;
+            const el = document.createElement('div');
+            rowEl.appendChild(el);
+            const slot = {
+                id: rowIndex * 1000 + index,
+                el,
+                row: rowIndex,
+                x: 0,
+                width: itemHeight,
+                aspectRatio: 1,
+                speed: 0,
+                scale: 1,
+                frozen: holdMotion,
+                swayPhase: hash01(rowIndex * 50 + index) * Math.PI * 2,
+            };
+            bindItem(slot);
+            applyVisuals(slot, spec);
+            slot.speed = speedFor(slot.id);
+            applyDepth(slot);
+            const mine = pool.filter((entry) => entry.row === rowIndex);
+            if (side === 'left') {
+                const left = mine.reduce((best, entry) => (!best || entry.x < best.x ? entry : best), null);
+                slot.x = left ? left.x - slot.width - ITEM_GAP_PX : -slot.width;
+            } else {
+                const right = mine.reduce(
+                    (best, entry) =>
+                        !best || entry.x + entry.width > best.x + best.width ? entry : best,
+                    null
+                );
+                slot.x = right ? right.x + right.width + ITEM_GAP_PX : 0;
+            }
+            paint(slot);
+            pool.push(slot);
+            markShown(slot.spec);
+            releaseReserved(slot.spec);
+        };
+
+        const fillRowToCover = async (rowIndex, mode) => {
+            for (let n = 0; n < 80 && rowNeedsCoverage(rowIndex, mode); n += 1) {
+                let spec = pickFillSpec();
+                if (!spec?.img) {
+                    const raw = dealRaw() || STREAM_LIBRARY[n % STREAM_LIBRARY.length];
+                    if (raw) spec = await decodeSmall(raw);
+                }
+                if (!spec?.img) spec = pickFillSpec();
+                if (!spec?.img) {
+                    const any = pool.find((slot) => slot.spec?.img?.naturalWidth);
+                    if (any) spec = cloneReadySpec(any.spec);
+                }
+                if (!spec?.img) break;
+                if (imgOwnedByOtherSlot(spec.img, null)) spec = cloneReadySpec(spec);
+                const mine = pool.filter((slot) => slot.row === rowIndex);
+                const maxX = mine.length ? Math.max(...mine.map((slot) => slot.x + slot.width)) : 0;
+                const minX = mine.length ? Math.min(...mine.map((slot) => slot.x)) : 0;
+                const side =
+                    mode === 'enter-left' || (maxX >= viewportWidth + itemHeight && minX > -itemHeight)
+                        ? 'left'
+                        : 'right';
+                appendSlotToRow(rowIndex, spec, side);
+            }
+            packRow(rowIndex, mode === 'enter-left');
+        };
+
+        const assignRowPhotos = (rowIndex) => {
+            if (rowAssignments.has(rowIndex)) return rowAssignments.get(rowIndex);
+            const raws = [];
+            const count = photosPerRow();
+            for (let i = 0; i < count; i += 1) {
+                raws.push(dealRaw() || STREAM_LIBRARY[i % STREAM_LIBRARY.length]);
+            }
+            rowAssignments.set(rowIndex, raws);
+            return raws;
         };
 
         let bootPromises = null;
@@ -1404,36 +1828,45 @@ function Clothing() {
         const startRow = (rowIndex, mode) => {
             if (cancelled || startedRows.has(rowIndex) || !rows[rowIndex]) return Promise.resolve();
             startedRows.add(rowIndex);
-            const raws = [];
-            const count = photosPerRow();
-            for (let i = 0; i < count; i += 1) {
-                const raw = nextRawItem();
-                if (!raw) break;
-                raws.push(raw);
-            }
+            const raws = assignRowPhotos(rowIndex);
             const job = (async () => {
-                const specs = [];
-                for (const raw of raws) {
-                    if (cancelled || !rows[rowIndex] || !rows[rowIndex].isConnected) {
-                        raws.forEach(releaseReserved);
-                        startedRows.delete(rowIndex);
-                        return;
-                    }
-                    specs.push(await decodeSmall(raw));
-                }
-                const rowEl = rows[rowIndex];
-                if (cancelled || !rowEl || !rowEl.isConnected || !specs.length) {
+                const decoded = await mapWithConcurrency(raws, DECODE_CONCURRENCY, decodeSmall);
+                if (cancelled || !rows[rowIndex] || !rows[rowIndex].isConnected) {
                     raws.forEach(releaseReserved);
                     startedRows.delete(rowIndex);
                     return;
                 }
+                const specs = (decoded || []).filter((spec) => spec?.img);
+                while (specs.length < raws.length) {
+                    const extra = pickFillSpec();
+                    if (!extra) break;
+                    specs.push(extra);
+                }
+                const rowEl = rows[rowIndex];
+                if (cancelled || !rowEl || !rowEl.isConnected) {
+                    raws.forEach(releaseReserved);
+                    startedRows.delete(rowIndex);
+                    return;
+                }
+                if (mode === 'enter-left') {
+                    const elapsed = (performance.now() - pageStartedAt) / 1000;
+                    const wait = Math.max(0, lastIntroStartAt + INTRO_MIN_GAP_SECONDS - elapsed);
+                    lastIntroStartAt = elapsed + wait;
+                    if (wait > 0) {
+                        await new Promise((resolve) => window.setTimeout(resolve, wait * 1000));
+                    }
+                    if (cancelled || !rowEl.isConnected) return;
+                    markIntroPlayed();
+                }
                 if (mode !== 'enter-left') rowEl.style.visibility = 'hidden';
                 populateRow(rowIndex, specs, mode);
+                await fillRowToCover(rowIndex, mode);
                 const mine = pool.filter((slot) => slot.row === rowIndex);
-                mine.forEach((slot) => {
-                    slot.frozen = true;
-                });
-                await decodeElements(rowEl);
+                if (holdMotion) {
+                    mine.forEach((slot) => {
+                        slot.frozen = true;
+                    });
+                }
                 if (cancelled || !rowEl.isConnected) return;
                 if (!holdMotion) {
                     mine.forEach((slot) => {
@@ -1445,7 +1878,7 @@ function Clothing() {
                 scheduleUpcoming();
                 syncPlayback();
             })();
-            if (bootPromises) bootPromises.push(job);
+            if (bootPromises) bootPromises.push({ index: rowIndex, job });
             return job;
         };
 
@@ -1453,28 +1886,28 @@ function Clothing() {
         let introRunning = false;
         let introNextAt = INTRO_FIRST_DELAY_SECONDS;
 
-        const rowOffstage = new Set();
-        const rowObserver = new IntersectionObserver((entries) => {
-            entries.forEach((entry) => {
-                const index = Number(entry.target.dataset.rowIndex);
-                if (!Number.isFinite(index)) return;
-                if (entry.isIntersecting) {
-                    rowOffstage.delete(index);
-                    return;
-                }
-                rowOffstage.add(index);
-                if (window.innerWidth > MOBILE_BREAKPOINT_PX) return;
-                pool.forEach((slot) => {
-                    if (slot.row === index) slot.el.style.willChange = '';
-                });
-            });
-        }, { root: null, rootMargin: '160px 0px', threshold: 0 });
-
         const placeRow = (index) => {
             const rowEl = rows[index];
             if (!rowEl) return;
             rowEl.style.top = `${index * stridePx()}px`;
             rowEl.style.height = `${itemHeight}px`;
+        };
+
+        const acquireRow = () => {
+            const rowEl = spareRows.pop() || document.createElement('div');
+            rowEl.className = 'floating-streams-row';
+            return rowEl;
+        };
+
+        const releaseRow = (rowEl) => {
+            rowEl.replaceChildren();
+            rowEl.remove();
+            rowEl.removeAttribute('style');
+            rowEl.removeAttribute('data-row-index');
+            rowEl.removeAttribute('data-blocked');
+            rowEl.removeAttribute('data-opacity');
+            rowEl.className = 'floating-streams-row';
+            spareRows.push(rowEl);
         };
 
         const removeRow = (index) => {
@@ -1487,21 +1920,18 @@ function Clothing() {
                 releaseReserved(pool[i].spec);
                 pool.splice(i, 1);
             }
-            rowEl.remove();
-            rowObserver.unobserve(rowEl);
-            rowOffstage.delete(index);
+            releaseRow(rowEl);
             rows[index] = null;
             startedRows.delete(index);
             introPlan.delete(index);
         };
 
         const ensureRow = (index, mode) => {
+            assignRowPhotos(index);
             if (!rows[index]) {
-                const rowEl = document.createElement('div');
-                rowEl.className = 'floating-streams-row';
+                const rowEl = acquireRow();
                 rowEl.dataset.rowIndex = String(index);
                 section.appendChild(rowEl);
-                rowObserver.observe(rowEl);
                 rows[index] = rowEl;
                 rowPose[index] = { ty: 0, scale: 1 };
             }
@@ -1519,11 +1949,10 @@ function Clothing() {
         };
 
         const growSection = (throughIndex) => {
-            const needed = (throughIndex + 1) * stridePx() + viewHeight();
-            const current = parseFloat(section.style.height) || 0;
-            if (needed > current || pageScroll() + viewHeight() + stridePx() < needed) {
-                section.style.height = `${needed}px`;
-            }
+            const needed = throughIndex + 1;
+            if (needed <= allocatedRows) return;
+            allocatedRows = Math.ceil(needed / HEIGHT_CHUNK_ROWS) * HEIGHT_CHUNK_ROWS;
+            section.style.height = `${allocatedRows * stridePx()}px`;
         };
 
         let mountedKey = '';
@@ -1533,10 +1962,11 @@ function Clothing() {
             const from = Math.max(0, first - buffer);
             const to = last + buffer;
             mountedKey = `${first}:${last}`;
-            growSection(to);
+            growSection(to + lookaheadRows());
+            for (let index = from; index <= to; index += 1) assignRowPhotos(index);
+            pumpSmalls();
             for (let index = from; index <= to; index += 1) {
-                const onScreen = index >= first && index <= last;
-                if (introRunning && onScreen && !startedRows.has(index)) ensureRow(index, 'intro');
+                if (introRunning && !startedRows.has(index)) ensureRow(index, 'intro');
                 else ensureRow(index, 'filled');
             }
             for (let index = 0; index < rows.length; index += 1) {
@@ -1553,7 +1983,6 @@ function Clothing() {
             const delay = Math.max(0, at * 1000 - (performance.now() - pageStartedAt));
             const timer = window.setTimeout(() => {
                 if (cancelled || !rows[index]) return;
-                if (at === INTRO_FIRST_DELAY_SECONDS) markIntroPlayed();
                 startRow(index, 'enter-left');
             }, delay);
             introTimers.push(timer);
@@ -1586,8 +2015,9 @@ function Clothing() {
             for (let i = pool.length - 1; i >= 0; i -= 1) {
                 const slot = pool[i];
                 if (!slot.spec || slot.frozen) continue;
+                if (!slotHasLoadedPhoto(slot)) continue;
                 if (slot.el.style.pointerEvents === 'none') continue;
-                if (slot.el.style.opacity === '0') continue;
+                if (slot.el.style.opacity === '0' || slot.paintedOpacity === 0) continue;
                 if (viewer && (!isFramingRow(slot.row) || slot === viewer.slot)) continue;
                 const scale = slot.scale || 1;
                 const width = slot.width * scale;
@@ -1637,31 +2067,52 @@ function Clothing() {
             window.addEventListener('pointerout', onHoverPointerOut);
         }
 
+        const warnEmptyVisibleTiles = () => {
+            const originY = streamOriginY - pageScroll();
+            const stride = stridePx();
+            const viewTop = 0;
+            const viewBottom = viewHeight();
+            pool.forEach((slot) => {
+                if (slot.frozen || slotIsHeld(slot)) return;
+                const top = originY + slot.row * stride;
+                const onScreen =
+                    slot.x + slot.width > 0 &&
+                    slot.x < viewportWidth &&
+                    top + itemHeight > viewTop &&
+                    top < viewBottom;
+                if (!onScreen) return;
+                if (slotHasLoadedPhoto(slot) && slot.paintedOpacity !== 0) return;
+                if (slot._emptyWarned) return;
+                slot._emptyWarned = true;
+                console.warn('Visible tile has no loaded photo', {
+                    row: slot.row,
+                    x: Math.round(slot.x),
+                    src: slot.spec && slot.spec.src,
+                    hasImg: !!(slot.spec && slot.spec.img),
+                    attached: !!(slot.spec && slot.spec.img && slot.spec.img.parentNode === slot.el),
+                    opacity: slot.el.style.opacity,
+                });
+            });
+        };
+
         const tick = (now) => {
             if (!running) return;
             const dt = lastTime ? Math.min(MAX_FRAME_SECONDS, (now - lastTime) / 1000) : 0;
             lastTime = now;
 
             const motionScale = reducedMotion ? REDUCED_MOTION_SPEED_SCALE : 1;
-            const mobileMotion = window.innerWidth <= MOBILE_BREAKPOINT_PX;
             if (motionScale > 0 && dt > 0) {
                 for (let i = 0; i < pool.length; i += 1) {
                     const slot = pool[i];
                     if (slot.frozen) continue;
-                    const onStage = !rowOffstage.has(slot.row);
-                    if (!onStage && !(viewer && slot === viewer.slot)) continue;
-                    let speedScale = motionScale;
-                    if (mobileMotion && viewer) {
-                        if (!isFramingRow(slot.row) && slot !== viewer.slot) continue;
-                        speedScale *= MOBILE_OPEN_SPEED;
-                    }
-                    slot.x += slot.speed * speedScale * dt;
+                    slot.x += slot.speed * motionScale * dt;
                     if (SWAY_SPEED) slot.swayPhase += SWAY_SPEED * dt;
-                    if (mobileMotion && slot.el.style.willChange !== 'transform') {
-                        slot.el.style.willChange = 'transform';
+                    if (slot.x > viewportWidth) {
+                        recycle(slot);
+                        continue;
                     }
-                    if (slot.x > viewportWidth) recycle(slot);
-                    else paint(slot);
+                    const rowHidden = rows[slot.row]?.dataset.opacity === '0';
+                    if (!rowHidden || slotIsHeld(slot)) paint(slot);
                 }
             } else if (viewer) {
                 paint(viewer.slot);
@@ -1669,6 +2120,8 @@ function Clothing() {
 
             advanceViewer(now, dt);
             if (fineHover) syncHover();
+            if (process.env.NODE_ENV !== 'production') warnEmptyVisibleTiles();
+            if (readyPoolCount() < READY_POOL_MIN) pumpSmalls();
 
             if (running) rafId = requestAnimationFrame(tick);
         };
@@ -1704,10 +2157,6 @@ function Clothing() {
             introTimers.length = 0;
         };
 
-        const preloadFirstRowSmalls = () => {
-            peekUpcoming(photosPerRow()).forEach(decodeSmall);
-        };
-
         overlay.addEventListener('click', closeViewer);
         closeBtn.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -1730,10 +2179,20 @@ function Clothing() {
 
         if (playIntro) {
             introRunning = true;
-            preloadFirstRowSmalls();
-            const schedule = introStartTimes(onScreenIndexes());
+            const buffer = window.innerWidth <= MOBILE_BREAKPOINT_PX ? MOBILE_ROW_BUFFER : ROW_BUFFER;
+            const { first, last } = visibleBounds();
+            const from = Math.max(0, first - buffer);
+            const to = last + buffer;
+            const introIndexes = [];
+            for (let index = from; index <= to; index += 1) introIndexes.push(index);
+            const schedule = introStartTimes(introIndexes);
+            schedule.forEach(({ index }) => assignRowPhotos(index));
+            const decodeOrder = schedule.flatMap(({ index }) => rowAssignments.get(index) || []);
+            mapWithConcurrency(decodeOrder, DECODE_CONCURRENCY, decodeSmall);
             schedule.forEach((item) => scheduleIntroRow(item.index, item.at));
-            introNextAt = (schedule[schedule.length - 1]?.at || INTRO_FIRST_DELAY_SECONDS) + INTRO_MIN_GAP_SECONDS;
+            introNextAt =
+                (schedule[schedule.length - 1]?.at || INTRO_FIRST_DELAY_SECONDS) +
+                INTRO_MIN_GAP_SECONDS;
             mountRange();
             const finishIntro = window.setTimeout(() => {
                 introRunning = false;
@@ -1744,18 +2203,24 @@ function Clothing() {
             holdMotion = true;
             bootPromises = [];
             mountRange();
-            const pending = bootPromises;
+            const pending = bootPromises || [];
             bootPromises = null;
-            Promise.all(pending).then(() => {
-                if (cancelled) return;
-                holdMotion = false;
-                pool.forEach((slot) => {
-                    slot.frozen = false;
-                    paint(slot);
-                });
-                section.style.visibility = '';
-                syncPlayback();
-            });
+            const visible = new Set(onScreenIndexes());
+            const visibleJobs = pending
+                .filter((entry) => visible.has(entry.index))
+                .map((entry) => entry.job);
+            Promise.all(visibleJobs.length ? visibleJobs : pending.map((entry) => entry.job)).then(
+                () => {
+                    if (cancelled) return;
+                    holdMotion = false;
+                    pool.forEach((slot) => {
+                        slot.frozen = false;
+                        paint(slot);
+                    });
+                    section.style.visibility = '';
+                    syncPlayback();
+                }
+            );
         }
 
         const intersection = new IntersectionObserver(
@@ -1773,10 +2238,18 @@ function Clothing() {
         let scrollFrame = 0;
         const onScroll = () => {
             if (scrollLockY != null || pageIsZoomed()) return;
+            const y = pageScroll();
+            const t = performance.now();
+            if (lastScrollT) {
+                scrollSpeed = (Math.abs(y - lastScrollY) / Math.max(1, t - lastScrollT)) * 1000;
+            }
+            lastScrollY = y;
+            lastScrollT = t;
             if (scrollFrame) return;
             scrollFrame = requestAnimationFrame(() => {
                 scrollFrame = 0;
                 if (cancelled || scrollLockY != null) return;
+                pumpSmalls();
                 const { first, last } = visibleBounds();
                 if (`${first}:${last}` === mountedKey) return;
                 mountRange();
@@ -1804,6 +2277,7 @@ function Clothing() {
                 }
                 const previousHeight = itemHeight;
                 applyLayoutMetrics();
+                allocatedRows = 0;
                 const scale = previousHeight > 0 ? itemHeight / previousHeight : 1;
                 if (Math.abs(scale - 1) > 0.001) {
                     pool.forEach((slot) => {
@@ -1819,6 +2293,9 @@ function Clothing() {
                         slot.speed = speedFor(slot.id);
                     });
                 }
+                const rowIndexes = [...new Set(pool.map((slot) => slot.row))];
+                rowIndexes.forEach(packRow);
+                rowIndexes.forEach((index) => fillRowToCover(index, 'filled'));
                 mountRange();
                 if (fineHover && hoverSlot) {
                     hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
@@ -1837,7 +2314,6 @@ function Clothing() {
             clearIntroTimers();
             pause();
             intersection.disconnect();
-            rowObserver.disconnect();
             document.removeEventListener('visibilitychange', onVisibility);
             document.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('resize', onResize);
@@ -1862,6 +2338,10 @@ function Clothing() {
             flyers.forEach((node) => node.root.remove());
             closeBtn.remove();
             pool.forEach((slot) => slot.el.remove());
+            decodedSpecs.forEach((spec) => {
+                if (spec?.objectUrl) URL.revokeObjectURL(spec.objectUrl);
+            });
+            decodedSpecs.clear();
         };
     }, []);
 
