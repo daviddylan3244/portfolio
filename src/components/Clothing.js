@@ -63,7 +63,9 @@ const DECODED_CACHE_LIMIT = 400;
 const READY_POOL_MIN_DESKTOP = 72;
 const READY_POOL_MIN_MOBILE = 32;
 const HEIGHT_CHUNK_ROWS = 20;
-const LARGE_HOVER_DELAY_MS = 350;
+const LARGE_HOVER_DELAY_MS = 100;
+const LARGE_CROSSFADE_MS = 200;
+const LARGE_CACHE_LIMIT = 8;
 
 // Click-to-open viewer
 const OPEN_TRANSITION_MS = 450;
@@ -362,11 +364,17 @@ function orientedJpegSize(meta) {
         : { width: meta.width, height: meta.height };
 }
 
-function imgFromBlob(blob) {
+function throwIfAborted(signal) {
+    if (!signal?.aborted) return;
+    throw new DOMException('Aborted', 'AbortError');
+}
+
+function imgFromBlob(blob, options = {}) {
     const img = document.createElement('img');
     img.alt = '';
     img.draggable = false;
     img.decoding = 'async';
+    if (options.fetchPriority) img.fetchPriority = options.fetchPriority;
     const objectUrl = URL.createObjectURL(blob);
     img.src = objectUrl;
     const decoded =
@@ -409,14 +417,25 @@ async function loadDecodedImage(src, options = {}) {
     if (!src) {
         return { img: null, objectUrl: '', aspectRatio: 1, src };
     }
-    const fetchOptions = options.priority ? { priority: options.priority } : {};
+    const { priority, signal } = options;
+    throwIfAborted(signal);
+    const fetchOptions = {};
+    if (priority) fetchOptions.priority = priority;
+    if (signal) fetchOptions.signal = signal;
     const response = await fetch(encodeURI(src), fetchOptions);
+    throwIfAborted(signal);
     const buffer = await response.arrayBuffer();
+    throwIfAborted(signal);
     const meta = readJpegMeta(buffer);
     const oriented = orientedJpegSize(meta);
     const original = new Blob([buffer], { type: 'image/jpeg' });
     const blob = await bakeOrientedBlob(original, meta);
-    const loaded = await imgFromBlob(blob);
+    throwIfAborted(signal);
+    const loaded = await imgFromBlob(blob, { fetchPriority: priority });
+    if (signal?.aborted) {
+        if (loaded.objectUrl) URL.revokeObjectURL(loaded.objectUrl);
+        throwIfAborted(signal);
+    }
     const width = loaded.img.naturalWidth || oriented.width || 1;
     const height = loaded.img.naturalHeight || oriented.height || 1;
     let aspectRatio = width / height;
@@ -588,7 +607,9 @@ function Clothing() {
         let pointerY = 0;
         let pointerInside = false;
         let hoverSlot = null;
-        const largePromises = new Map();
+        const largeDecoded = new Map();
+        const largeDecodedOrder = [];
+        const largeInflight = new Map();
         let viewer = null;
 
         const opacityForSlot = (slot) => {
@@ -1133,43 +1154,96 @@ function Clothing() {
             photoStats.duplicates = extras;
         };
 
-        const warmLarge = (spec) => {
-            if (!spec?.srcFull) return Promise.resolve(null);
-            const key = spec.srcFull;
-            if (!largePromises.has(key)) {
-                largePromises.set(
-                    key,
-                    loadDecodedImage(spec.srcFull, { priority: 'low' })
-                        .then((loaded) => loaded.img)
-                        .catch(() => null)
-                );
+        const getCachedLarge = (spec) => {
+            const key = spec?.srcFull;
+            if (!key || !largeDecoded.has(key)) return null;
+            const index = largeDecodedOrder.indexOf(key);
+            if (index >= 0) {
+                largeDecodedOrder.splice(index, 1);
+                largeDecodedOrder.push(key);
             }
-            return largePromises.get(key);
+            return largeDecoded.get(key).img;
+        };
+
+        const largeKeyInUse = (key) => {
+            if (!key) return false;
+            if (viewer?.spec?.srcFull === key) return true;
+            if (viewer?.departures?.some((dep) => dep.spec?.srcFull === key)) return true;
+            const loaded = largeDecoded.get(key);
+            const src = loaded?.img?.src;
+            if (!src) return false;
+            return flyers.some((node) => node.large && node.large.src === src);
+        };
+
+        const trimLargeCache = () => {
+            while (largeDecodedOrder.length > LARGE_CACHE_LIMIT) {
+                const victim = largeDecodedOrder.find((key) => !largeKeyInUse(key));
+                if (!victim) break;
+                const index = largeDecodedOrder.indexOf(victim);
+                if (index >= 0) largeDecodedOrder.splice(index, 1);
+                const loaded = largeDecoded.get(victim);
+                largeDecoded.delete(victim);
+                if (loaded?.objectUrl) URL.revokeObjectURL(loaded.objectUrl);
+            }
+        };
+
+        const rememberLarge = (key, loaded) => {
+            if (!key || !loaded?.img) return;
+            if (largeDecoded.has(key)) {
+                const index = largeDecodedOrder.indexOf(key);
+                if (index >= 0) largeDecodedOrder.splice(index, 1);
+            }
+            largeDecoded.set(key, loaded);
+            largeDecodedOrder.push(key);
+            trimLargeCache();
+        };
+
+        const abortOtherLarges = (keepKey) => {
+            largeInflight.forEach((load, key) => {
+                if (key === keepKey) return;
+                if (load.reason === 'open' && viewer?.spec?.srcFull === key) return;
+                load.controller.abort();
+                largeInflight.delete(key);
+            });
+        };
+
+        const loadLarge = (spec, { priority = 'low', reason = 'preload' } = {}) => {
+            const key = spec?.srcFull;
+            if (!key) return Promise.resolve(null);
+            const cached = getCachedLarge(spec);
+            if (cached) return Promise.resolve(cached);
+            const existing = largeInflight.get(key);
+            if (existing) {
+                if (priority === 'high' && existing.priority !== 'high') existing.priority = 'high';
+                return existing.promise;
+            }
+            const controller = new AbortController();
+            const promise = loadDecodedImage(key, { priority, signal: controller.signal })
+                .then((loaded) => {
+                    if (largeInflight.get(key)?.controller !== controller) return null;
+                    largeInflight.delete(key);
+                    rememberLarge(key, loaded);
+                    return loaded?.img || null;
+                })
+                .catch((err) => {
+                    if (largeInflight.get(key)?.controller === controller) {
+                        largeInflight.delete(key);
+                    }
+                    if (err?.name === 'AbortError') return null;
+                    return null;
+                });
+            largeInflight.set(key, { promise, controller, priority, reason });
+            return promise;
         };
 
         const scheduleLarge = (spec, reason) => {
-            if (!spec?.srcFull) return;
-            const start = () => {
-                if (reason !== 'open' && (smallsInFlight > 0 || collectDecodeQueue().length)) return;
-                warmLarge(spec);
-            };
-            if (reason === 'open') {
-                start();
-                return;
-            }
-            if (reason === 'pointerdown') {
-                if (smallsInFlight > 0 || collectDecodeQueue().length) {
-                    window.setTimeout(start, 0);
-                    return;
-                }
-                start();
-                return;
-            }
-            if (typeof requestIdleCallback === 'function') {
-                requestIdleCallback(start, { timeout: 1200 });
-            } else {
-                window.setTimeout(start, 0);
-            }
+            if (!spec?.srcFull || cancelled) return;
+            if (reason === 'hover' && (smallsInFlight > 0 || collectDecodeQueue().length)) return;
+            abortOtherLarges(spec.srcFull);
+            loadLarge(spec, {
+                priority: reason === 'open' ? 'high' : 'low',
+                reason,
+            });
         };
 
         const lookaheadRows = () => {
@@ -1224,22 +1298,19 @@ function Clothing() {
             });
         };
 
-        let backgroundLarges = 0;
         const prefetchUpcomingLarge = () => {
+            if (viewer) return Promise.resolve();
             if (smallsInFlight > 0 || collectDecodeQueue().length || readyPoolCount() < readyPoolMin()) {
                 return Promise.resolve();
             }
-            const room = 6 - backgroundLarges;
-            if (room <= 0) return Promise.resolve();
-            const pending = peekUpcoming(room).filter(
-                (item) => item.srcFull && !largePromises.has(item.srcFull)
+            if (largeInflight.size > 0 || largeDecoded.size >= LARGE_CACHE_LIMIT) {
+                return Promise.resolve();
+            }
+            const next = peekUpcoming(1).find(
+                (item) => item.srcFull && !largeDecoded.has(item.srcFull) && !largeInflight.has(item.srcFull)
             );
-            backgroundLarges += pending.length;
-            return mapWithConcurrency(pending, 1, (item) =>
-                warmLarge(item).finally(() => {
-                    backgroundLarges = Math.max(0, backgroundLarges - 1);
-                })
-            );
+            if (!next) return Promise.resolve();
+            return loadLarge(next, { priority: 'low', reason: 'prefetch' });
         };
 
         const scheduleUpcoming = () => {
@@ -1425,6 +1496,14 @@ function Clothing() {
             if (node.frame.style.opacity !== value) node.frame.style.opacity = value;
         };
 
+        const attachLargeToFlyer = (node, image) => {
+            if (!node?.large || !image) return;
+            node.large.fetchPriority = 'high';
+            node.large.setAttribute('fetchpriority', 'high');
+            node.large.decoding = 'async';
+            if (node.large.src !== image.src) node.large.src = image.src;
+        };
+
         const configureFlyer = (node, layout, spec) => {
             const { root, small, large } = node;
             sizeFlyer(node, layout);
@@ -1432,33 +1511,62 @@ function Clothing() {
             root.style.willChange = 'transform, opacity';
             root.style.opacity = '1';
             root.hidden = false;
-            small.style.visibility = 'visible';
-            large.style.opacity = '0';
-            large.removeAttribute('src');
             small.src = spec?.objectUrl || (spec?.src ? encodeURI(spec.src) : '');
+            const cached = getCachedLarge(spec);
+            if (cached) {
+                small.style.visibility = 'hidden';
+                attachLargeToFlyer(node, cached);
+                large.style.opacity = '1';
+            } else {
+                small.style.visibility = 'visible';
+                large.removeAttribute('src');
+                large.style.opacity = '0';
+            }
             setFlyerFrame(node, 0);
         };
 
-        const showLarge = (node) => {
-            if (!node) return;
-            node.small.style.visibility = 'hidden';
-            node.large.style.opacity = '1';
+        const armLarge = (node, spec) => {
+            abortOtherLarges(spec?.srcFull);
+            loadLarge(spec, { priority: 'high', reason: 'open' }).then((image) => {
+                if (!image || cancelled || !viewer || viewer.spec !== spec) return;
+                if (viewer.phase === 'closing') return;
+                if (activeFlyer !== node) return;
+                attachLargeToFlyer(node, image);
+                viewer.largeReady = true;
+                if (viewer.largeFromStart || viewer.largeOpacity >= 1) {
+                    viewer.largeOpacity = 1;
+                    viewer.largeShown = true;
+                    node.large.style.opacity = '1';
+                    node.small.style.visibility = 'hidden';
+                    return;
+                }
+                if (!viewer.largeFadeStart) viewer.largeFadeStart = performance.now();
+                play();
+            });
         };
 
-        const armLarge = (node, spec) => {
-            const reveal = (image) => {
-                if (!image || !viewer || viewer.spec !== spec) return;
-                if (activeFlyer === node) {
-                    node.large.src = image.src;
-                }
-                viewer.largeReady = true;
-                viewer.largeOpacity = 1;
-                if (viewer.phase === 'open' && !viewer.largeShown && activeFlyer === node) {
-                    showLarge(node);
+        const syncLargeFade = (now) => {
+            if (!viewer || !activeFlyer) return;
+            if (viewer.phase !== 'closing' && viewer.largeReady) {
+                if (viewer.largeFromStart) {
+                    viewer.largeOpacity = 1;
                     viewer.largeShown = true;
+                } else {
+                    if (!viewer.largeFadeStart) viewer.largeFadeStart = now;
+                    const t = Math.min(1, (now - viewer.largeFadeStart) / Math.max(1, LARGE_CROSSFADE_MS));
+                    viewer.largeOpacity = t;
+                    if (t >= 1) viewer.largeShown = true;
                 }
-            };
-            warmLarge(spec).then(reveal);
+            }
+            const opacity = viewer.largeOpacity || 0;
+            const opacityText = String(opacity);
+            if (activeFlyer.large.style.opacity !== opacityText) {
+                activeFlyer.large.style.opacity = opacityText;
+            }
+            const vis = opacity >= 1 ? 'hidden' : 'visible';
+            if (activeFlyer.small.style.visibility !== vis) {
+                activeFlyer.small.style.visibility = vis;
+            }
         };
 
         const placeOverlay = (pose, layout) => {
@@ -1554,10 +1662,7 @@ function Clothing() {
                     viewer.settled = true;
                     syncCloseButton();
                 }
-                if (viewer.largeReady && !viewer.largeShown) {
-                    showLarge(activeFlyer);
-                    viewer.largeShown = true;
-                }
+                syncLargeFade(now);
                 return;
             }
             viewer.settled = false;
@@ -1583,21 +1688,19 @@ function Clothing() {
                 const pose = reducedMotion ? viewer.to : lerpPose(viewer.from, viewer.to, amount);
                 if (reducedMotion) activeFlyer.root.style.opacity = String(amount);
                 placeOverlay(pose, viewer.layout);
+                syncLargeFade(now);
                 if (raw >= 1) {
                     viewer.phase = 'open';
                     viewer.frameOpacity = 1;
                     activeFlyer.root.style.opacity = '1';
                     activeFlyer.root.style.willChange = 'auto';
                     closeBtn.style.willChange = 'auto';
-                    if (viewer.largeReady && !viewer.largeShown) {
-                        showLarge(activeFlyer);
-                        viewer.largeShown = true;
-                    }
                 }
             } else if (viewer.phase === 'open') {
                 viewer.thumbOpacity = 0;
                 viewer.frameOpacity = 1;
                 placeOverlay(viewer.to, viewer.layout);
+                syncLargeFade(now);
             } else if (viewer.phase === 'closing') {
                 const raw = Math.min(1, (now - viewer.closeT0) / closeDuration);
                 const amount = easeClose(raw);
@@ -1668,10 +1771,17 @@ function Clothing() {
                 largeReady: false,
                 largeOpacity: 0,
                 largeFadeStart: 0,
+                largeFromStart: false,
                 settled: false,
                 largeShown: false,
             };
 
+            abortOtherLarges(spec.srcFull);
+            const cachedLarge = getCachedLarge(spec);
+            viewer.largeReady = !!cachedLarge;
+            viewer.largeFromStart = !!cachedLarge;
+            viewer.largeOpacity = cachedLarge ? 1 : 0;
+            viewer.largeShown = !!cachedLarge;
             configureFlyer(activeFlyer, layout, spec);
             if (reducedMotion) activeFlyer.root.style.opacity = '0';
             placeOverlay(reducedMotion ? to : from, layout);
@@ -1686,7 +1796,11 @@ function Clothing() {
             paint(slot);
             applyRows(0);
             play();
-            armLarge(activeFlyer, spec);
+            if (cachedLarge) {
+                loadLarge(spec, { priority: 'high', reason: 'open' });
+            } else {
+                armLarge(activeFlyer, spec);
+            }
             closeBtn.focus({ preventScroll: true });
         };
 
@@ -1749,13 +1863,23 @@ function Clothing() {
             viewer.frameOpacity = 0;
             viewer.progress = 0;
             viewer.settled = false;
-            viewer.largeShown = false;
-            viewer.largeOpacity = Number(node.large.style.opacity) || 0;
-            viewer.largeReady = viewer.largeOpacity >= 1 && !!node.large.getAttribute('src');
+            const switchedLarge = getCachedLarge(spec) || (node.large.getAttribute('src') ? { src: node.large.src } : null);
+            const switchedOpacity = Number(node.large.style.opacity) || 0;
+            viewer.largeReady = !!switchedLarge;
+            viewer.largeFromStart = !!switchedLarge && switchedOpacity >= 1;
+            viewer.largeOpacity = switchedLarge ? switchedOpacity : 0;
+            viewer.largeFadeStart = viewer.largeFromStart
+                ? 0
+                : switchedLarge && switchedOpacity > 0
+                  ? now - switchedOpacity * LARGE_CROSSFADE_MS
+                  : 0;
+            viewer.largeShown = viewer.largeFromStart;
+            if (switchedLarge) attachLargeToFlyer(node, switchedLarge);
             placeOverlay(from, layout);
             node.root.hidden = false;
             sizeFlyer(node, layout);
             if (!viewer.largeReady) armLarge(node, spec);
+            else loadLarge(spec, { priority: 'high', reason: 'open' });
             paint(slot);
             play();
         };
@@ -1800,13 +1924,15 @@ function Clothing() {
             el.setAttribute('role', 'button');
             el.setAttribute('aria-label', 'Open image');
             el.addEventListener('pointerdown', (event) => {
+                scheduleLarge(slot.spec, 'pointerdown');
                 if (event.pointerType === 'touch') {
                     slot.tapX = event.clientX;
                     slot.tapY = event.clientY;
-                    return;
                 }
-                scheduleLarge(slot.spec, 'pointerdown');
             });
+            el.addEventListener('touchstart', () => {
+                scheduleLarge(slot.spec, 'pointerdown');
+            }, { passive: true });
             el.addEventListener('pointerup', (event) => {
                 if (event.pointerType !== 'touch') return;
                 const dx = Math.abs(event.clientX - slot.tapX);
@@ -1815,17 +1941,19 @@ function Clothing() {
                 slot.openedFromTap = true;
                 activateSlot(slot);
             });
-            el.addEventListener('mouseenter', () => {
-                slot.hoverTimer = window.setTimeout(() => {
-                    scheduleLarge(slot.spec, 'hover');
-                }, LARGE_HOVER_DELAY_MS);
-            });
-            el.addEventListener('mouseleave', () => {
-                if (slot.hoverTimer) {
-                    window.clearTimeout(slot.hoverTimer);
-                    slot.hoverTimer = 0;
-                }
-            });
+            if (fineHover) {
+                el.addEventListener('mouseenter', () => {
+                    slot.hoverTimer = window.setTimeout(() => {
+                        scheduleLarge(slot.spec, 'hover');
+                    }, LARGE_HOVER_DELAY_MS);
+                });
+                el.addEventListener('mouseleave', () => {
+                    if (slot.hoverTimer) {
+                        window.clearTimeout(slot.hoverTimer);
+                        slot.hoverTimer = 0;
+                    }
+                });
+            }
             el.addEventListener('click', (event) => {
                 event.stopPropagation();
                 if (slot.openedFromTap) {
@@ -2007,14 +2135,26 @@ function Clothing() {
         let bootPromises = null;
         let holdMotion = false;
         const startRow = (rowIndex, mode) => {
-            if (cancelled || startedRows.has(rowIndex) || !rows[rowIndex]) return Promise.resolve();
+            const rowEl = rows[rowIndex];
+            if (cancelled || startedRows.has(rowIndex) || !rowEl) return Promise.resolve();
             startedRows.add(rowIndex);
+            introPlan.delete(rowIndex);
             const raws = assignRowPhotos(rowIndex);
+            const stillHere = () => !cancelled && rows[rowIndex] === rowEl && rowEl.isConnected;
+            const abortStart = () => {
+                raws.forEach(releaseReserved);
+                if (rows[rowIndex] === rowEl) {
+                    startedRows.delete(rowIndex);
+                    introEntering.delete(rowIndex);
+                } else if (!rows[rowIndex]) {
+                    startedRows.delete(rowIndex);
+                    introEntering.delete(rowIndex);
+                }
+            };
             const job = (async () => {
                 const decoded = await mapWithConcurrency(raws, DECODE_CONCURRENCY, decodeSmall);
-                if (cancelled || !rows[rowIndex] || !rows[rowIndex].isConnected) {
-                    raws.forEach(releaseReserved);
-                    startedRows.delete(rowIndex);
+                if (!stillHere()) {
+                    abortStart();
                     return;
                 }
                 const specs = [];
@@ -2030,20 +2170,21 @@ function Clothing() {
                     if (!extra) break;
                     specs.push(extra);
                 }
-                const rowEl = rows[rowIndex];
-                if (cancelled || !rowEl || !rowEl.isConnected) {
-                    raws.forEach(releaseReserved);
-                    startedRows.delete(rowIndex);
+                if (!stillHere()) {
+                    abortStart();
                     return;
                 }
                 if (mode === 'enter-left') {
                     introEntering.add(rowIndex);
-                    if (cancelled || !rowEl.isConnected) return;
                     markIntroPlayed();
                 }
                 if (mode !== 'enter-left') rowEl.style.visibility = 'hidden';
                 populateRow(rowIndex, specs, mode);
                 await fillRowToCover(rowIndex, mode);
+                if (!stillHere()) {
+                    abortStart();
+                    return;
+                }
                 pool.forEach((slot) => {
                     if (slot.row !== rowIndex || slotHasLoadedPhoto(slot)) return;
                     decodeOntoSlot(slot, libraryByKey.get(photoKey(slot.spec)) || slot.spec);
@@ -2054,7 +2195,10 @@ function Clothing() {
                         slot.frozen = true;
                     });
                 }
-                if (cancelled || !rowEl.isConnected) return;
+                if (!stillHere()) {
+                    abortStart();
+                    return;
+                }
                 if (!holdMotion) {
                     mine.forEach((slot) => {
                         slot.frozen = false;
@@ -2070,7 +2214,6 @@ function Clothing() {
         };
 
         const introPlan = new Set();
-        let introRunning = false;
         let introNextAt = INTRO_FIRST_DELAY_SECONDS;
 
         const rowIsEnteringFromLeft = (rowIndex) => {
@@ -2127,7 +2270,7 @@ function Clothing() {
             rowAssignments.delete(index);
         };
 
-        const ensureRow = (index, mode) => {
+        const ensureRow = (index) => {
             assignRowPhotos(index);
             if (!rows[index]) {
                 const rowEl = acquireRow();
@@ -2138,14 +2281,6 @@ function Clothing() {
             }
             placeRow(index);
             if (startedRows.has(index) || introPlan.has(index)) return;
-            if (mode === 'intro') {
-                const at = Math.max(
-                    introNextAt,
-                    (performance.now() - pageStartedAt) / 1000 + INTRO_MIN_GAP_SECONDS
-                );
-                scheduleIntroRow(index, at);
-                return;
-            }
             startRow(index, 'filled');
         };
 
@@ -2167,11 +2302,7 @@ function Clothing() {
             for (let index = from; index <= to; index += 1) assignRowPhotos(index);
             pumpSmalls();
             for (let index = from; index <= to; index += 1) {
-                if (startedRows.has(index) || introPlan.has(index) || introRunning) {
-                    ensureRow(index, 'intro');
-                } else {
-                    ensureRow(index, 'filled');
-                }
+                ensureRow(index);
             }
             for (let index = 0; index < rows.length; index += 1) {
                 if (!rows[index]) continue;
@@ -2186,7 +2317,11 @@ function Clothing() {
             introNextAt = Math.max(introNextAt, at + INTRO_MIN_GAP_SECONDS);
             const delay = Math.max(0, at * 1000 - (performance.now() - pageStartedAt));
             const timer = window.setTimeout(() => {
-                if (cancelled || !rows[index]) return;
+                if (cancelled || !introPlan.has(index)) return;
+                if (!rows[index]) {
+                    introPlan.delete(index);
+                    return;
+                }
                 startRow(index, 'enter-left');
             }, delay);
             introTimers.push(timer);
@@ -2405,13 +2540,7 @@ function Clothing() {
         };
 
         if (playIntro) {
-            introRunning = true;
-            const buffer = window.innerWidth <= MOBILE_BREAKPOINT_PX ? MOBILE_ROW_BUFFER : ROW_BUFFER;
-            const { first, last } = visibleBounds();
-            const from = Math.max(0, first - buffer);
-            const to = last + buffer;
-            const introIndexes = [];
-            for (let index = from; index <= to; index += 1) introIndexes.push(index);
+            const introIndexes = onScreenIndexes();
             const schedule = introStartTimes(introIndexes);
             schedule.forEach(({ index }) => assignRowPhotos(index));
             const decodeOrder = schedule.flatMap(({ index }) => rowAssignments.get(index) || []);
@@ -2421,10 +2550,6 @@ function Clothing() {
                 (schedule[schedule.length - 1]?.at || INTRO_FIRST_DELAY_SECONDS) +
                 INTRO_MIN_GAP_SECONDS;
             mountRange();
-            const finishIntro = window.setTimeout(() => {
-                introRunning = false;
-            }, Math.max(0, introNextAt * 1000));
-            introTimers.push(finishIntro);
         } else {
             section.style.visibility = 'hidden';
             holdMotion = true;
@@ -2574,6 +2699,13 @@ function Clothing() {
                 if (spec?.objectUrl) URL.revokeObjectURL(spec.objectUrl);
             });
             decodedSpecs.clear();
+            largeInflight.forEach((load) => load.controller.abort());
+            largeInflight.clear();
+            largeDecoded.forEach((loaded) => {
+                if (loaded?.objectUrl) URL.revokeObjectURL(loaded.objectUrl);
+            });
+            largeDecoded.clear();
+            largeDecodedOrder.length = 0;
         };
     }, []);
 
