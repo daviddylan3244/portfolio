@@ -82,15 +82,32 @@ function Resume() {
               <li>Worked within the marketing department producing photography and short-form video that supported the sales team's client deliverables, turning live campaigns into visual assets that helped win and retain business.</li>
               <li>Covered fast-moving, time-sensitive events, including store openings, live performances, and product launches, delivering finished content on tight deadlines alongside the creative team.</li>
               <li>Created "beauty shots" for clients who purchased post-buy creative services: polished, carefully retouched photographs of their advertisements in the real world, which clients use to showcase their campaigns in context.</li>
-              <li>Handled the full workflow from capture to final edit using Adobe Photoshop, Lightroom Classic, and Premiere Pro.</li>
+              <li>Handled the full workflow from capture to final edit using Adobe Photoshop, Lightroom Classic, and Bridge.</li>
+              <li>Produced and delivered 200+ advertising projects across multiple client campaigns, managing several deadlines at once.</li>
+              <li>Coordinated with the sales, legal, and social media teams to deliver time-sensitive content across all five boroughs of New York City.</li>
             </ul>
           </article>
 
           <article className="resume-role">
             <header className="resume-role-head">
-              <h3>Intern</h3>
+              <h3>Photography News Staff & Part-Time Writer</h3>
+              <p className="resume-role-meta">The Huntington News · Boston</p>
+              <p className="resume-role-dates">December 2024 – Present</p>
+            </header>
+            <p className="resume-role-intro">The Huntington News is Northeastern University's independent, student-run newspaper.</p>
+            <ul>
+              <li>Photograph sports games, campus events, concerts, and student activities, with my images published in six articles to date.</li>
+              <li>Write and contribute to stories across the Lifestyle, Sports, and City sections, including published articles under my own byline.</li>
+              <li>Work on both sides of the story, as a photographer capturing the moment and as a writer shaping how it's told.</li>
+              <li>Awarded Photograph of the Month in February 2025.</li>
+            </ul>
+          </article>
+
+          <article className="resume-role">
+            <header className="resume-role-head">
+              <h3>Design & Production Associate</h3>
               <p className="resume-role-meta">Billboard Media Group · San Juan, Puerto Rico</p>
-              <p className="resume-role-dates">2018 – Present</p>
+              <p className="resume-role-dates">August 2021 – Present</p>
             </header>
             <p className="resume-role-intro">BMG is my mother's outdoor advertising company, a relatively small fish in the overall outdoor media market.</p>
             <ul>
@@ -98,20 +115,7 @@ function Resume() {
               <li>Started out working weekends on installations, helping put up smaller banners and display tarps for clients.</li>
               <li>Helped wherever I could over the years, often handling different parts of the business.</li>
               <li>Combined my drone piloting skills and love for photography to capture high-quality aerial shots of clients' advertisements, a service I've also provided for other outdoor media companies.</li>
-            </ul>
-          </article>
-
-          <article className="resume-role">
-            <header className="resume-role-head">
-              <h3>Photography Staff & Writer</h3>
-              <p className="resume-role-meta">The Huntington News · Boston</p>
-              <p className="resume-role-dates">December 2024 – Present</p>
-            </header>
-            <p className="resume-role-intro">The Huntington News is Northeastern University's independent, student-run newspaper.</p>
-            <ul>
-              <li>Photograph sports games, campus events, and student activities, with my images published in six articles to date.</li>
-              <li>Write and contribute to stories across the Lifestyle, Sports, and City sections, including published articles under my own byline.</li>
-              <li>Work on both sides of the story, as a photographer capturing the moment and as a writer shaping how it's told.</li>
+              <li>Helped produce and install 20+ advertisements on digital screens, trivision billboards, and large-format vinyl billboards, iterating on client graphics before installation.</li>
             </ul>
           </article>
 
@@ -125,6 +129,7 @@ function Resume() {
             <ul>
               <li>Co-led a full revitalization of the company's marketing strategy, rethinking how it presented itself in order to accelerate growth.</li>
               <li>Led client outreach, building and delivering pitches tailored to each prospective client's needs to expand the client base and open new business opportunities.</li>
+              <li>Launched a client spotlight newsletter featuring businesses that used the company's services.</li>
             </ul>
           </article>
 
@@ -132,7 +137,7 @@ function Resume() {
             <header className="resume-role-head">
               <h3>Industrial Design Intern</h3>
               <p className="resume-role-meta">Sidex Suministros · Murcia, Spain</p>
-              <p className="resume-role-dates">May 2019 – July 2023</p>
+              <p className="resume-role-dates">Summers 2019 – 2023</p>
             </header>
             <p className="resume-role-intro">Sidex Suministros is my father's industrial design company, specializing in extruded aluminum for all kinds of applications, and an official retailer of Bosch products.</p>
             <ul>
@@ -144,13 +149,13 @@ function Resume() {
 
           <article className="resume-role">
             <header className="resume-role-head">
-              <h3>Bowman</h3>
+              <h3>Crew Member</h3>
               <p className="resume-role-meta">PAROMA Sailing Team · San Juan, Puerto Rico</p>
-              <p className="resume-role-dates">August 2019 – Present</p>
+              <p className="resume-role-dates">August 2019 – August 2026</p>
             </header>
             <p className="resume-role-intro">PAROMA is an official sailing team in the Performance Cruiser class, racing aboard a Salona 44.</p>
             <ul>
-              <li>Crew the bow of the PAROMA racing yacht, the position responsible for sail changes, spinnaker work, and calling the start line, where timing and communication with the rest of the crew are critical.</li>
+              <li>Rotated through foredeck, main trimmer, and spinnaker trimmer positions aboard PAROMA, coordinating with the crew under time pressure.</li>
               <li>Have competed in multiple regattas, including the BVI and USVI Spring International Regattas.</li>
               <li>Experienced across a range of smaller boats, including the Optimist, Laser, 420, 470, and Hobie 16.</li>
             </ul>
@@ -177,12 +182,12 @@ function Resume() {
             <header className="resume-role-head">
               <h3>Northeastern University</h3>
               <p className="resume-role-meta">Boston, MA</p>
-              <p className="resume-role-dates">Expected May 2027</p>
+              <p className="resume-role-dates">Expected May 2028</p>
             </header>
             <p className="resume-note">D'Amore-McKim School of Business & College of Arts, Media and Design</p>
             <p className="resume-note">Bachelor of Business Administration and Design · Concentrations in Finance & Marketing · Minor in Law and Policy</p>
-            <p className="resume-note">Relevant coursework: Financial Accounting and Reporting, Financial Management, Investments, Profit Analysis and Managerial Accounting, Macroeconomics, Business Statistics, and Law and Policy.</p>
-            <p className="resume-note">Activities: Northeastern Electric Racing, The Huntington News, Case Institute, Club Squash, and Intramural Soccer.</p>
+            <p className="resume-note">Relevant coursework: Advertising & Brand Promotion, Marketing, Strategy in Action, Corporate Finance, Financial Accounting & Reporting, Business Statistics, Introduction to Law, Introduction to Law and Policy, and Corruption and Integrity.</p>
+            <p className="resume-note">Activities: Northeastern Electric Racing, The Huntington News, NUTV, Case Institute, LATAM Business Club, Club Squash, and Intramural Soccer.</p>
           </article>
 
           <article className="resume-role">
@@ -204,7 +209,7 @@ function Resume() {
               <p className="resume-role-meta">San Juan, PR</p>
               <p className="resume-role-dates">June 2023</p>
             </header>
-            <p className="resume-note">Honor Roll · Varsity Swim Team (2018–2023) · AP Seminar and Research Certificate</p>
+            <p className="resume-note">Honor Roll · Varsity Swim Team (2018–2023) · AP Seminar and Research Certificate · Work-Study Award</p>
           </article>
         </section>
 
@@ -213,19 +218,27 @@ function Resume() {
           <div className="resume-card">
           <div className="skill-group">
             <h3>Photo & video</h3>
-            <p>Adobe Photoshop, Lightroom Classic, Premiere Pro, After Effects</p>
+            <p>Adobe Photoshop, Lightroom Classic, Bridge, Premiere Pro, After Effects</p>
           </div>
           <div className="skill-group">
-            <h3>Design & engineering</h3>
-            <p>Autodesk Fusion 360, SolidWorks, MTPro</p>
+            <h3>Design</h3>
+            <p>Adobe InDesign, Figma, Canva</p>
+          </div>
+          <div className="skill-group">
+            <h3>Engineering & 3D</h3>
+            <p>Autodesk Fusion 360, SolidWorks, MTPro, UltiMaker Cura</p>
           </div>
           <div className="skill-group">
             <h3>Business & marketing</h3>
-            <p>Microsoft Office, Google Workspace, Google Ads (certified in Measurement, AI-Powered Performance, and Creative)</p>
+            <p>Microsoft Office (Advanced Excel), Google Workspace, Google Analytics, Salesforce, Google Ads (certified in Measurement, AI-Powered Performance, and Creative)</p>
+          </div>
+          <div className="skill-group">
+            <h3>Web & tech</h3>
+            <p>React, JavaScript, HTML/CSS, Cursor, AI prompt engineering</p>
           </div>
           <div className="skill-group">
             <h3>Languages</h3>
-            <p>English and Spanish, both native</p>
+            <p>English and Spanish (native), Portuguese (intermediate)</p>
           </div>
           <div className="skill-group">
             <h3>Other certifications</h3>
