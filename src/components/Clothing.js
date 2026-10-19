@@ -4,10 +4,38 @@ import '../styles/Header.css';
 import '../styles/Clothing.css';
 import photoManifest from '../data/photo-manifest.json';
 import photoInfo from '../data/photo-info.json';
+import { randomScrambleChar, SCRAMBLE_START_INTERVAL_MS } from '../utils/decrypt';
 
 const ASPECT_BY_NUMBER = new Map(
     photoManifest.map((entry) => [entry.number, entry.aspect])
 );
+
+// ---------------------------------------------------------------------------
+// Gallery-wall experiment. true = enlarged photo sits to the right of a text
+// panel. false = the previous version, a small title label under the photo.
+// ---------------------------------------------------------------------------
+const GALLERY_PANEL_ENABLED = true;
+const GALLERY_PANEL_MIN_PX = 280;
+const GALLERY_PANEL_MAX_PX = 360;
+const GALLERY_PANEL_GAP_PX = 40;
+// Narrower than this and there is no room for a panel beside the photo.
+const GALLERY_SIDE_MIN_PX = 820;
+// Below the photo the panel gets a block of its own and scrolls inside it.
+const GALLERY_BELOW_GAP_PX = 12;
+const GALLERY_BELOW_PX = 140;
+// Opening is in two steps: grow to the centre, then slide across to the panel
+// layout. The text sweeps in left to right once the slide lands.
+const GALLERY_SLIDE_MS = 350;
+const GALLERY_SWEEP_MS = 620;
+const GALLERY_CHAR_MIN_MS = 160;
+const GALLERY_CHAR_EXTRA_MS = 140;
+const GALLERY_TEXT_OUT_MS = 150;
+const GALLERY_DETAILS_PLACEHOLDER = 'Lorem ipsum · Dolor sit';
+const GALLERY_TEXT_PLACEHOLDER =
+    'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+    + 'tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim '
+    + 'veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea '
+    + 'commodo. Duis aute irure dolor in reprehenderit in voluptate velit esse.';
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -254,6 +282,11 @@ function frameOpacityFor(phase, amount) {
         return Math.max(0, 1 - (amount - 0.55) / 0.45);
     }
     return 0;
+}
+
+function easeInOut(amount) {
+    const x = Math.max(0, Math.min(1, amount));
+    return x < 0.5 ? 2 * x * x : 1 - ((-2 * x + 2) ** 2) / 2;
 }
 
 function lerpPose(from, to, amount) {
@@ -623,7 +656,30 @@ function Clothing() {
         captionYear.className = 'stream-caption-year';
         caption.append(captionTitle, captionYear);
 
+        // Gallery-wall text panel. Unlike the caption it takes pointer events,
+        // so text in it can be selected.
+        const panel = document.createElement('div');
+        panel.className = 'stream-panel';
+        panel.hidden = true;
+        panel.style.opacity = '0';
+        panel.style.setProperty('--panel-out-ms', `${GALLERY_TEXT_OUT_MS}ms`);
+        const panelInner = document.createElement('div');
+        panelInner.className = 'stream-panel-inner';
+        const panelTitle = document.createElement('i');
+        panelTitle.className = 'stream-panel-title';
+        const panelYear = document.createElement('div');
+        panelYear.className = 'stream-panel-year';
+        const panelDetails = document.createElement('div');
+        panelDetails.className = 'stream-panel-details';
+        const panelRule = document.createElement('div');
+        panelRule.className = 'stream-panel-rule';
+        const panelText = document.createElement('p');
+        panelText.className = 'stream-panel-text';
+        panelInner.append(panelTitle, panelYear, panelDetails, panelRule, panelText);
+        panel.append(panelInner);
+
         document.body.append(overlay, closeBtn, caption);
+        if (GALLERY_PANEL_ENABLED) document.body.append(panel);
 
         const menuEl = section.parentElement
             ? section.parentElement.querySelector('.header-nav')
@@ -1410,19 +1466,65 @@ function Clothing() {
             return 1;
         };
 
+        // The panel sits beside the photo on wide screens and below it on
+        // narrow ones; either way its room comes out of the viewer's box.
+        const panelBeside = () =>
+            GALLERY_PANEL_ENABLED && window.innerWidth >= GALLERY_SIDE_MIN_PX;
+
+        const panelWidthPx = () =>
+            Math.max(
+                GALLERY_PANEL_MIN_PX,
+                Math.min(GALLERY_PANEL_MAX_PX, Math.round(window.innerWidth * 0.24))
+            );
+
+        const bottomReservePx = () => {
+            if (!GALLERY_PANEL_ENABLED) return CAPTION_RESERVE_PX;
+            return panelBeside() ? 0 : GALLERY_BELOW_GAP_PX + GALLERY_BELOW_PX;
+        };
+
+        const panelGeometry = (box) => {
+            if (!GALLERY_PANEL_ENABLED) return null;
+            const { beside, groupLeft, border, inner, endLeft, endTop, bandBottom } = box;
+            if (beside) {
+                // Spans the photo's height; the text inside sits at the bottom.
+                return {
+                    beside: true,
+                    left: groupLeft,
+                    top: endTop - border,
+                    width: panelWidthPx(),
+                    height: inner.height + border * 2,
+                };
+            }
+            const left = Math.max(8, endLeft - border);
+            const top = endTop + inner.height + border + GALLERY_BELOW_GAP_PX;
+            return {
+                beside: false,
+                left,
+                top,
+                width: Math.min(
+                    window.innerWidth - left - 8,
+                    Math.max(240, inner.width + border * 2)
+                ),
+                height: Math.max(80, bandBottom - top),
+            };
+        };
+
         const layoutViewer = (spec, bases, slot) => {
             const aspect = viewerAspect(spec, slot);
+            const reserve = bottomReservePx();
+            const beside = panelBeside();
+            const sideCost = beside ? panelWidthPx() + GALLERY_PANEL_GAP_PX : 0;
             const topIndex = viewer ? viewer.frameTop : visibleBounds().first;
             const bottomIndex = viewer ? viewer.frameBottom : visibleBounds().last;
             const topRow = bases[topIndex] || bases.find(Boolean);
             const bottomRow = bases[bottomIndex] || [...bases].reverse().find(Boolean);
             if (!topRow || !bottomRow) {
                 const border = viewerBorderPx();
-                const maxTotalH = Math.max(
+                const maxTotalH = Math.max(80, viewHeight() - VIEWER_GAP_PX * 2 - reserve);
+                const maxTotalW = Math.max(
                     80,
-                    viewHeight() - VIEWER_GAP_PX * 2 - CAPTION_RESERVE_PX
+                    window.innerWidth - VIEWER_GAP_PX * 2 - sideCost
                 );
-                const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
                 const inner = fitInBox(
                     aspect,
                     Math.max(40, maxTotalW - border * 2),
@@ -1430,13 +1532,30 @@ function Clothing() {
                 );
                 const totalW = inner.width + border * 2;
                 const totalH = inner.height + border * 2;
+                const groupLeft = Math.max(
+                    VIEWER_GAP_PX,
+                    (window.innerWidth - (totalW + sideCost)) / 2
+                );
+                const centerLeft = (window.innerWidth - inner.width) / 2;
+                const endLeft = beside ? groupLeft + sideCost + border : centerLeft;
+                const endTop = (viewHeight() - inner.height - reserve) / 2;
                 return {
                     border,
                     inner,
                     totalW,
                     totalH,
-                    endLeft: (window.innerWidth - inner.width) / 2,
-                    endTop: (viewHeight() - inner.height - CAPTION_RESERVE_PX) / 2,
+                    endLeft,
+                    endTop,
+                    centerLeft,
+                    panel: panelGeometry({
+                        beside,
+                        groupLeft,
+                        border,
+                        inner,
+                        endLeft,
+                        endTop,
+                        bandBottom: viewHeight() - VIEWER_GAP_PX,
+                    }),
                 };
             }
             const border = viewerBorderPx();
@@ -1446,13 +1565,16 @@ function Clothing() {
             const visibleBottom = Math.min(gapBottom, viewHeight() - VIEWER_GAP_PX);
             const betweenRows = visibleBottom - visibleTop;
             const room = viewHeight() - VIEWER_GAP_PX * 2;
-            // The caption lives in the same band, so it comes off the height
-            // the photo and frame are allowed to use.
+            // Anything that sits under the photo lives in the same band, so it
+            // comes off the height the photo and frame are allowed to use.
             const maxTotalH = Math.max(
                 80,
-                Math.min(room, betweenRows > 40 ? betweenRows : room) - CAPTION_RESERVE_PX
+                Math.min(room, betweenRows > 40 ? betweenRows : room) - reserve
             );
-            const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
+            const maxTotalW = Math.max(
+                80,
+                window.innerWidth - VIEWER_GAP_PX * 2 - sideCost
+            );
             const inner = fitInBox(
                 aspect,
                 Math.max(40, maxTotalW - border * 2),
@@ -1460,13 +1582,18 @@ function Clothing() {
             );
             const totalW = inner.width + border * 2;
             const totalH = inner.height + border * 2;
-            const endLeft = (window.innerWidth - inner.width) / 2;
+            const groupLeft = Math.max(
+                VIEWER_GAP_PX,
+                (window.innerWidth - (totalW + sideCost)) / 2
+            );
+            const centerLeft = (window.innerWidth - inner.width) / 2;
+            const endLeft = beside ? groupLeft + sideCost + border : centerLeft;
             let endTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2 + border;
             endTop = Math.max(
                 VIEWER_GAP_PX + border,
                 Math.min(
                     endTop,
-                    viewHeight() - inner.height - VIEWER_GAP_PX - border - CAPTION_RESERVE_PX
+                    viewHeight() - inner.height - VIEWER_GAP_PX - border - reserve
                 )
             );
 
@@ -1477,6 +1604,33 @@ function Clothing() {
                 totalH,
                 endLeft,
                 endTop,
+                centerLeft,
+                panel: panelGeometry({
+                    beside,
+                    groupLeft,
+                    border,
+                    inner,
+                    endLeft,
+                    endTop,
+                    bandBottom: visibleBottom,
+                }),
+            };
+        };
+
+        // Step A grows the photo to the centre; the slide across to the panel
+        // layout is a second step, so the two never blend into one move.
+        const openTargetFor = (layout) => {
+            const slide =
+                GALLERY_PANEL_ENABLED
+                && !reducedMotion
+                && Math.abs(layout.endLeft - layout.centerLeft) > 0.5;
+            return {
+                slide,
+                pose: {
+                    x: slide ? layout.centerLeft : layout.endLeft,
+                    y: layout.endTop,
+                    scale: 1,
+                },
             };
         };
 
@@ -1629,6 +1783,10 @@ function Clothing() {
         // Text is rewritten on every open and every switch, so the caption can
         // never be left showing the photo before it.
         const setCaptionText = (spec) => {
+            if (GALLERY_PANEL_ENABLED) {
+                caption.hidden = true;
+                return;
+            }
             const info = photoLabelFor(spec);
             captionTitle.textContent = info ? info.title : '';
             captionYear.textContent = info && info.year ? `, ${info.year}` : '';
@@ -1651,9 +1809,262 @@ function Clothing() {
         };
 
         const syncCaption = () => {
+            if (GALLERY_PANEL_ENABLED) return;
             const show = !!viewer && viewer.phase === 'open' && !viewer.closeDone;
             const value = show ? '1' : '0';
             if (caption.style.opacity !== value) caption.style.opacity = value;
+        };
+
+        // Panel text reveal. The real text stays in flow so wrapping is locked;
+        // the scramble runs in an absolutely placed layer on top of it, the way
+        // the landing page overlays its decrypt value on a hidden sizer.
+        let panelRaf = 0;
+        let panelGlyphs = [];
+        let panelOverlay = null;
+        let panelShown = false;
+
+        const panelTextEls = () => [panelTitle, panelYear, panelDetails, panelText];
+
+        const stopPanelRevealLoop = () => {
+            if (!panelRaf) return;
+            cancelAnimationFrame(panelRaf);
+            panelRaf = 0;
+        };
+
+        // Puts the panel back to plain, selectable text.
+        const clearPanelReveal = () => {
+            stopPanelRevealLoop();
+            panelGlyphs = [];
+            if (panelOverlay) {
+                panelOverlay.remove();
+                panelOverlay = null;
+            }
+            panelTextEls().forEach((el) => {
+                el.style.visibility = '';
+            });
+            panelRule.style.opacity = '';
+            panelRule.style.clipPath = '';
+            panelInner.removeAttribute('aria-hidden');
+            panel.removeAttribute('aria-label');
+        };
+
+        // Where a character actually paints, measured the same way for the real
+        // text and for a glyph: the text box, not the element box.
+        const textRect = (range, node, index) => {
+            range.setStart(node, index);
+            range.setEnd(node, index + 1);
+            return range.getBoundingClientRect();
+        };
+
+        // One measuring pass: every character's resting position, read once.
+        const buildPanelGlyphs = () => {
+            const base = panel.getBoundingClientRect();
+            const overlay = document.createElement('div');
+            overlay.className = 'stream-panel-scramble';
+            overlay.setAttribute('aria-hidden', 'true');
+            const range = document.createRange();
+            const glyphs = [];
+            const layers = [];
+            let maxX = 1;
+
+            panelTextEls().forEach((el) => {
+                const node = el.firstChild;
+                if (!node || node.nodeType !== 3 || !node.nodeValue) return;
+                const text = node.nodeValue;
+                const style = window.getComputedStyle(el);
+                const layer = document.createElement('span');
+                layer.className = 'stream-panel-scramble-layer';
+                layer.style.fontFamily = style.fontFamily;
+                layer.style.fontSize = style.fontSize;
+                layer.style.fontStyle = style.fontStyle;
+                layer.style.fontWeight = style.fontWeight;
+                let probe = null;
+                for (let index = 0; index < text.length; index += 1) {
+                    const char = text[index];
+                    if (char === ' ' || char === '\u00A0') continue;
+                    const rect = textRect(range, node, index);
+                    if (!rect.width) continue;
+                    const x = rect.left - base.left;
+                    const glyph = document.createElement('span');
+                    glyph.className = 'stream-panel-glyph';
+                    glyph.textContent = char;
+                    glyph.style.left = `${x}px`;
+                    glyph.style.top = `${rect.top - base.top}px`;
+                    // Matching the measured text box leaves no half-leading, so
+                    // the glyph's baseline lands on the real character's.
+                    glyph.style.lineHeight = `${rect.height}px`;
+                    glyph.style.opacity = '0';
+                    layer.append(glyph);
+                    glyphs.push({ el: glyph, char, x, start: 0, end: 0, tick: -1, done: false });
+                    if (x > maxX) maxX = x;
+                    if (!probe) probe = { glyph, rect, label: el.className };
+                }
+                if (!layer.childNodes.length) return;
+                overlay.append(layer);
+                layers.push({ layer, probe });
+            });
+
+            if (!glyphs.length) return false;
+            glyphs.forEach((glyph) => {
+                glyph.start = (glyph.x / maxX) * GALLERY_SWEEP_MS;
+                glyph.end =
+                    glyph.start + GALLERY_CHAR_MIN_MS + Math.random() * GALLERY_CHAR_EXTRA_MS;
+            });
+            panelGlyphs = glyphs;
+            panelOverlay = overlay;
+            const checked = process.env.NODE_ENV !== 'production'
+                ? { scrollHeight: panel.scrollHeight, innerTop: panelInner.getBoundingClientRect().top }
+                : null;
+            panelTextEls().forEach((el) => {
+                el.style.visibility = 'hidden';
+            });
+            panelInner.setAttribute('aria-hidden', 'true');
+            panel.append(overlay);
+
+            // Absorb any residual offset rather than trusting the font metrics:
+            // compare a rendered glyph with the character it covers.
+            const report = [];
+            layers.forEach(({ layer, probe }) => {
+                if (!probe) return;
+                const shown = textRect(range, probe.glyph.firstChild, 0);
+                const dx = probe.rect.left - shown.left;
+                const dy = probe.rect.top - shown.top;
+                if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+                    layer.style.transform = `translate(${dx}px, ${dy}px)`;
+                }
+                if (checked) report.push({ line: probe.label, dx, dy, probe });
+            });
+
+            if (checked) {
+                const after = report.map(({ line, dx, dy, probe }) => {
+                    const fixed = textRect(range, probe.glyph.firstChild, 0);
+                    return {
+                        line,
+                        beforeDx: Number(dx.toFixed(2)),
+                        beforeDy: Number(dy.toFixed(2)),
+                        afterDx: Number((probe.rect.left - fixed.left).toFixed(2)),
+                        afterDy: Number((probe.rect.top - fixed.top).toFixed(2)),
+                    };
+                });
+                console.info('[panel] glyph vs real character offset', after);
+                console.info('[panel] overlay layout cost', {
+                    scrollHeight: panel.scrollHeight - checked.scrollHeight,
+                    innerTop: Number(
+                        (panelInner.getBoundingClientRect().top - checked.innerTop).toFixed(2)
+                    ),
+                });
+            }
+            return true;
+        };
+
+        const startPanelReveal = () => {
+            clearPanelReveal();
+            if (!GALLERY_PANEL_ENABLED || panel.hidden) return;
+            if (reducedMotion) return;
+            panel.setAttribute(
+                'aria-label',
+                panelTextEls().map((el) => el.textContent).filter(Boolean).join('. ')
+            );
+            if (!buildPanelGlyphs()) {
+                panel.removeAttribute('aria-label');
+                return;
+            }
+            panelRule.style.opacity = '0';
+            panelRule.style.clipPath = 'inset(0 100% 0 0)';
+            const t0 = performance.now();
+            const tick = (now) => {
+                panelRaf = 0;
+                const elapsed = now - t0;
+                let pending = 0;
+                for (let i = 0; i < panelGlyphs.length; i += 1) {
+                    const glyph = panelGlyphs[i];
+                    if (glyph.done) continue;
+                    if (elapsed < glyph.start) {
+                        pending += 1;
+                        continue;
+                    }
+                    if (elapsed >= glyph.end) {
+                        glyph.done = true;
+                        glyph.el.style.opacity = '1';
+                        if (glyph.el.textContent !== glyph.char) glyph.el.textContent = glyph.char;
+                        continue;
+                    }
+                    pending += 1;
+                    const amount = (elapsed - glyph.start) / (glyph.end - glyph.start);
+                    glyph.el.style.opacity = amount.toFixed(2);
+                    const step = Math.floor((elapsed - glyph.start) / SCRAMBLE_START_INTERVAL_MS);
+                    if (step !== glyph.tick) {
+                        glyph.tick = step;
+                        glyph.el.textContent = randomScrambleChar();
+                    }
+                }
+                const sweep = Math.min(1, elapsed / GALLERY_SWEEP_MS);
+                panelRule.style.opacity = String(Math.min(1, elapsed / 150));
+                panelRule.style.clipPath = `inset(0 ${((1 - sweep) * 100).toFixed(1)}% 0 0)`;
+                if (!pending && sweep >= 1) {
+                    clearPanelReveal();
+                    return;
+                }
+                panelRaf = requestAnimationFrame(tick);
+            };
+            panelRaf = requestAnimationFrame(tick);
+        };
+
+        // On open and on switch the panel drops out without a fade, so the new
+        // text never fades out before it fades in.
+        const hidePanelInstantly = () => {
+            if (!GALLERY_PANEL_ENABLED) return;
+            panelShown = false;
+            clearPanelReveal();
+            panel.classList.remove('is-leaving');
+            panel.style.transition = 'none';
+            panel.style.opacity = '0';
+            panel.style.pointerEvents = 'none';
+            void panel.offsetWidth;
+            panel.style.transition = '';
+        };
+
+        const setPanelText = (spec) => {
+            if (!GALLERY_PANEL_ENABLED) return;
+            const info = photoLabelFor(spec);
+            panelTitle.textContent = info ? info.title : '';
+            panelYear.textContent = info && info.year ? info.year : '';
+            panelDetails.textContent = (info && info.details) || GALLERY_DETAILS_PLACEHOLDER;
+            panelText.textContent = (info && info.description) || GALLERY_TEXT_PLACEHOLDER;
+            panel.hidden = !info;
+            panel.scrollTop = 0;
+        };
+
+        // Parked at the flyer's resting place, like the caption.
+        const placePanel = (layout) => {
+            if (!GALLERY_PANEL_ENABLED || panel.hidden || !layout?.panel) return;
+            const box = layout.panel;
+            panel.classList.toggle('is-below', !box.beside);
+            panel.style.width = `${Math.round(box.width)}px`;
+            panel.style.height = `${Math.round(box.height)}px`;
+            panel.style.transform =
+                `translate3d(${Math.round(box.left)}px, ${Math.round(box.top)}px, 0)`;
+        };
+
+        // Edge triggered: the sweep starts the moment the slide lands.
+        const syncPanel = () => {
+            if (!GALLERY_PANEL_ENABLED) return;
+            const show = !!viewer && viewer.phase === 'open' && !viewer.closeDone;
+            if (show === panelShown) return;
+            panelShown = show;
+            if (!show) {
+                stopPanelRevealLoop();
+                panel.style.opacity = '0';
+                panel.style.pointerEvents = 'none';
+                return;
+            }
+            panel.classList.remove('is-leaving');
+            panel.style.transition = 'none';
+            panel.style.opacity = '1';
+            panel.style.pointerEvents = 'auto';
+            void panel.offsetWidth;
+            panel.style.transition = '';
+            startPanelReveal();
         };
 
         const finishViewer = () => {
@@ -1675,6 +2086,12 @@ function Clothing() {
             closeBtn.hidden = true;
             caption.style.opacity = '0';
             caption.hidden = true;
+            clearPanelReveal();
+            panelShown = false;
+            panel.classList.remove('is-leaving');
+            panel.style.opacity = '0';
+            panel.style.pointerEvents = 'none';
+            panel.hidden = true;
             closeBtn.style.willChange = 'auto';
             if (menuEl) {
                 menuEl.style.opacity = '';
@@ -1735,6 +2152,7 @@ function Clothing() {
                     viewer.settled = true;
                     syncCloseButton();
                     syncCaption();
+                    syncPanel();
                 }
                 syncLargeFade(now);
                 return;
@@ -1759,14 +2177,35 @@ function Clothing() {
                 viewer.progress = raw;
                 viewer.thumbOpacity = 0;
                 viewer.frameOpacity = reducedMotion ? amount : frameOpacityFor(viewer.phase, amount);
-                const pose = reducedMotion ? viewer.to : lerpPose(viewer.from, viewer.to, amount);
+                const pose = reducedMotion
+                    ? viewer.openTo
+                    : lerpPose(viewer.from, viewer.openTo, amount);
                 if (reducedMotion) activeFlyer.root.style.opacity = String(amount);
                 placeOverlay(pose, viewer.layout);
                 syncLargeFade(now);
                 if (raw >= 1) {
-                    viewer.phase = 'open';
                     viewer.frameOpacity = 1;
                     activeFlyer.root.style.opacity = '1';
+                    if (viewer.needsSlide) {
+                        viewer.phase = 'sliding';
+                        viewer.slideT0 = now;
+                    } else {
+                        viewer.phase = 'open';
+                        activeFlyer.root.style.willChange = 'auto';
+                        closeBtn.style.willChange = 'auto';
+                    }
+                }
+            } else if (viewer.phase === 'sliding') {
+                const raw = Math.min(1, (now - viewer.slideT0) / GALLERY_SLIDE_MS);
+                const amount = easeInOut(raw);
+                viewer.progress = 1;
+                viewer.thumbOpacity = 0;
+                viewer.frameOpacity = 1;
+                const x = viewer.openTo.x + (viewer.to.x - viewer.openTo.x) * amount;
+                placeOverlay({ x, y: viewer.to.y, scale: 1 }, viewer.layout);
+                syncLargeFade(now);
+                if (raw >= 1) {
+                    viewer.phase = 'open';
                     activeFlyer.root.style.willChange = 'auto';
                     closeBtn.style.willChange = 'auto';
                 }
@@ -1793,6 +2232,7 @@ function Clothing() {
             if (!viewer) return;
             syncCloseButton();
             syncCaption();
+            syncPanel();
 
             if (viewer.phase === 'closing' && viewer.closeDone) {
                 const live = poseFromThumb(liveThumb(viewer.slot), viewer.layout);
@@ -1816,6 +2256,7 @@ function Clothing() {
             const layout = layoutViewer(spec, bases, slot);
             const from = poseFromThumb(liveThumb(slot), layout);
             const to = { x: layout.endLeft, y: layout.endTop, scale: 1 };
+            const opening = openTargetFor(layout);
 
             activeFlyer = homeFlyer;
             viewer = {
@@ -1827,6 +2268,9 @@ function Clothing() {
                 duration: transitionMs,
                 from,
                 to,
+                openTo: opening.pose,
+                needsSlide: opening.slide,
+                slideT0: 0,
                 pose: from,
                 layout,
                 rowBases: bases,
@@ -1863,6 +2307,9 @@ function Clothing() {
             caption.style.opacity = '0';
             setCaptionText(spec);
             placeCaption(layout);
+            hidePanelInstantly();
+            setPanelText(spec);
+            placePanel(layout);
             overlay.hidden = false;
             closeBtn.hidden = false;
             closeBtn.style.opacity = '0';
@@ -1935,6 +2382,10 @@ function Clothing() {
             viewer.t0 = now;
             viewer.from = from;
             viewer.to = { x: layout.endLeft, y: layout.endTop, scale: 1 };
+            const switchOpening = openTargetFor(layout);
+            viewer.openTo = switchOpening.pose;
+            viewer.needsSlide = switchOpening.slide;
+            viewer.slideT0 = 0;
             viewer.pose = from;
             viewer.layout = layout;
             viewer.thumbOpacity = 0;
@@ -1957,6 +2408,9 @@ function Clothing() {
             caption.style.opacity = '0';
             setCaptionText(spec);
             placeCaption(layout);
+            hidePanelInstantly();
+            setPanelText(spec);
+            placePanel(layout);
             node.root.hidden = false;
             sizeFlyer(node, layout);
             if (!viewer.largeReady) armLarge(node, spec);
@@ -1981,6 +2435,13 @@ function Clothing() {
             viewer.closeDone = false;
             viewer.thumbOpacity = 0;
             caption.style.opacity = '0';
+            // Freeze the sweep where it is and fade the text out quickly; the
+            // per-character layer is cleaned up once the photo has landed.
+            stopPanelRevealLoop();
+            panelShown = false;
+            panel.classList.add('is-leaving');
+            panel.style.opacity = '0';
+            panel.style.pointerEvents = 'none';
             closeBtn.style.opacity = '0';
             closeBtn.style.pointerEvents = 'none';
             activeFlyer.root.style.willChange = 'transform, opacity';
@@ -2661,6 +3122,13 @@ function Clothing() {
             event.stopPropagation();
             closeViewer();
         });
+        // Acts like the overlay, except while text in it is selected.
+        panel.addEventListener('click', () => {
+            if (!viewer) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed) return;
+            closeViewer();
+        });
         const onKeyDown = (event) => {
             if (event.key === 'Escape') closeViewer();
         };
@@ -2757,8 +3225,12 @@ function Clothing() {
                     viewer.rowBases = measureRows();
                     viewer.layout = layoutViewer(viewer.spec, viewer.rowBases, viewer.slot);
                     viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
+                    const resized = openTargetFor(viewer.layout);
+                    viewer.openTo = resized.pose;
+                    if (viewer.phase !== 'sliding') viewer.needsSlide = resized.slide;
                     if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
                     placeCaption(viewer.layout);
+                    placePanel(viewer.layout);
                     cacheStreamOrigin();
                     if (fineHover && hoverSlot) {
                         hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
@@ -2834,6 +3306,8 @@ function Clothing() {
             flyers.forEach((node) => node.root.remove());
             closeBtn.remove();
             caption.remove();
+            clearPanelReveal();
+            panel.remove();
             pool.forEach((slot) => slot.el.remove());
             decodedSpecs.forEach((spec) => {
                 if (spec?.objectUrl) URL.revokeObjectURL(spec.objectUrl);
