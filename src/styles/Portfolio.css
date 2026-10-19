@@ -18,7 +18,8 @@ li {
   margin-right: 0;
   padding: 0 40px 5rem;
   color: rgba(255, 255, 255, 0.9);
-  font-family: 'Special Elite', monospace;
+  font-family: var(--body-copy-font-family);
+  letter-spacing: var(--body-copy-letter-spacing);
   overflow-wrap: break-word;
   container-type: inline-size;
 }
@@ -215,7 +216,7 @@ li {
 
 .resume-container li {
   margin-bottom: 0.7rem;
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--body-copy-color);
   line-height: 1.55;
 }
 

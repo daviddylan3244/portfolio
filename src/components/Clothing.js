@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import '../styles/Header.css';
 import '../styles/Clothing.css';
 import photoManifest from '../data/photo-manifest.json';
+import photoInfo from '../data/photo-info.json';
 
 const ASPECT_BY_NUMBER = new Map(
     photoManifest.map((entry) => [entry.number, entry.aspect])
@@ -79,15 +80,21 @@ const VIEWER_BORDER_MIN_PX = 12;
 const VIEWER_BORDER_MAX_PX = 48;
 const CLOSE_BUTTON_GAP_PX = 10;
 const CLOSE_BUTTON_PX = 44;
+// Wall label under the enlarged photo: gap below the frame, plus the room the
+// layout keeps free for one line of it at its largest size.
+const CAPTION_GAP_PX = 10;
+const CAPTION_MIN_FONT_PX = 13;
+const CAPTION_MAX_FONT_PX = 16;
+const CAPTION_RESERVE_PX = CAPTION_GAP_PX + Math.ceil(CAPTION_MAX_FONT_PX * 1.3);
 // ---------------------------------------------------------------------------
 // Item library — web-sized photos. src = rows, srcFull = enlarged view.
 // Raise PHOTO_COUNT when a new batch is added. Files are photo-1 through photo-N.
 // ---------------------------------------------------------------------------
-const PHOTO_COUNT = 187;
+const PHOTO_COUNT = 194;
 const PHOTO_DIR = '/photos/Website digital/Photography';
-// 47 and 50 are held out on purpose.
+// 4, 47, 50 and 78 are held out on purpose.
 // 114–121 have a small export in the Large folder.
-const EXCLUDED_PHOTOS = [47, 50, 114, 115, 116, 117, 118, 119, 120, 121];
+const EXCLUDED_PHOTOS = [4, 47, 50, 78, 114, 115, 116, 117, 118, 119, 120, 121];
 // Skip numbers that are missing from small or Large (177 has neither file).
 const MISSING_PHOTOS = [177];
 
@@ -99,6 +106,14 @@ const STREAM_LIBRARY = Array.from({ length: PHOTO_COUNT }, (_, index) => index +
         src: `${PHOTO_DIR}/small/small-photo-${number}.jpg`,
         srcFull: `${PHOTO_DIR}/Large/Large-photo-${number}.jpg`,
     }));
+
+// Wall label text, keyed by photo number. Returns null when there is no title.
+const LABEL_EDGE_PAD_PX = 8;
+
+function photoLabelFor(spec) {
+    const info = spec && spec.number != null ? photoInfo[spec.number] : null;
+    return info && info.title ? info : null;
+}
 
 function photoNumberInPath(src) {
     const match = String(src || '').match(/photo-(\d+)\.jpg$/i);
@@ -596,7 +611,19 @@ function Clothing() {
         closeBtn.textContent = '×';
         closeBtn.hidden = true;
 
-        document.body.append(overlay, closeBtn);
+        // Sits outside the flyer so it does not scale with the opening photo.
+        // pointer-events stay off, so taps on it reach the overlay underneath.
+        const caption = document.createElement('div');
+        caption.className = 'stream-caption';
+        caption.hidden = true;
+        caption.style.opacity = '0';
+        const captionTitle = document.createElement('i');
+        captionTitle.className = 'stream-caption-title';
+        const captionYear = document.createElement('span');
+        captionYear.className = 'stream-caption-year';
+        caption.append(captionTitle, captionYear);
+
+        document.body.append(overlay, closeBtn, caption);
 
         const menuEl = section.parentElement
             ? section.parentElement.querySelector('.header-nav')
@@ -1006,6 +1033,9 @@ function Clothing() {
             } else if (!slot.el.querySelector('img')) {
                 slot.el.replaceChildren();
             }
+            if (slot.labelEl && slot.labelEl.parentNode !== slot.el) {
+                slot.el.appendChild(slot.labelEl);
+            }
         };
 
         const speedFor = (slotId) => {
@@ -1388,7 +1418,10 @@ function Clothing() {
             const bottomRow = bases[bottomIndex] || [...bases].reverse().find(Boolean);
             if (!topRow || !bottomRow) {
                 const border = viewerBorderPx();
-                const maxTotalH = Math.max(80, viewHeight() - VIEWER_GAP_PX * 2);
+                const maxTotalH = Math.max(
+                    80,
+                    viewHeight() - VIEWER_GAP_PX * 2 - CAPTION_RESERVE_PX
+                );
                 const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
                 const inner = fitInBox(
                     aspect,
@@ -1403,7 +1436,7 @@ function Clothing() {
                     totalW,
                     totalH,
                     endLeft: (window.innerWidth - inner.width) / 2,
-                    endTop: (viewHeight() - inner.height) / 2,
+                    endTop: (viewHeight() - inner.height - CAPTION_RESERVE_PX) / 2,
                 };
             }
             const border = viewerBorderPx();
@@ -1413,7 +1446,12 @@ function Clothing() {
             const visibleBottom = Math.min(gapBottom, viewHeight() - VIEWER_GAP_PX);
             const betweenRows = visibleBottom - visibleTop;
             const room = viewHeight() - VIEWER_GAP_PX * 2;
-            const maxTotalH = Math.max(80, Math.min(room, betweenRows > 40 ? betweenRows : room));
+            // The caption lives in the same band, so it comes off the height
+            // the photo and frame are allowed to use.
+            const maxTotalH = Math.max(
+                80,
+                Math.min(room, betweenRows > 40 ? betweenRows : room) - CAPTION_RESERVE_PX
+            );
             const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
             const inner = fitInBox(
                 aspect,
@@ -1426,7 +1464,10 @@ function Clothing() {
             let endTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2 + border;
             endTop = Math.max(
                 VIEWER_GAP_PX + border,
-                Math.min(endTop, viewHeight() - inner.height - VIEWER_GAP_PX - border)
+                Math.min(
+                    endTop,
+                    viewHeight() - inner.height - VIEWER_GAP_PX - border - CAPTION_RESERVE_PX
+                )
             );
 
             return {
@@ -1585,6 +1626,36 @@ function Clothing() {
             closeBtn.style.transform = `translate3d(${closeX}px, ${closeY}px, 0)`;
         };
 
+        // Text is rewritten on every open and every switch, so the caption can
+        // never be left showing the photo before it.
+        const setCaptionText = (spec) => {
+            const info = photoLabelFor(spec);
+            captionTitle.textContent = info ? info.title : '';
+            captionYear.textContent = info && info.year ? `, ${info.year}` : '';
+            caption.hidden = !info;
+        };
+
+        // Parked at the flyer's resting place, not its animated pose.
+        const placeCaption = (layout) => {
+            if (caption.hidden || !layout) return;
+            const border = layout.border || 0;
+            const left = Math.max(8, layout.endLeft - border);
+            const top = layout.endTop + layout.inner.height + border + CAPTION_GAP_PX;
+            const size = Math.max(
+                CAPTION_MIN_FONT_PX,
+                Math.min(CAPTION_MAX_FONT_PX, Math.round(layout.inner.width * 0.014))
+            );
+            caption.style.fontSize = `${size}px`;
+            caption.style.maxWidth = `${Math.max(120, window.innerWidth - left - 8)}px`;
+            caption.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+        };
+
+        const syncCaption = () => {
+            const show = !!viewer && viewer.phase === 'open' && !viewer.closeDone;
+            const value = show ? '1' : '0';
+            if (caption.style.opacity !== value) caption.style.opacity = value;
+        };
+
         const finishViewer = () => {
             if (!viewer) return;
             const slot = viewer.slot;
@@ -1602,6 +1673,8 @@ function Clothing() {
             unlockScroll();
             overlay.hidden = true;
             closeBtn.hidden = true;
+            caption.style.opacity = '0';
+            caption.hidden = true;
             closeBtn.style.willChange = 'auto';
             if (menuEl) {
                 menuEl.style.opacity = '';
@@ -1661,6 +1734,7 @@ function Clothing() {
                     placeOverlay(viewer.to, viewer.layout);
                     viewer.settled = true;
                     syncCloseButton();
+                    syncCaption();
                 }
                 syncLargeFade(now);
                 return;
@@ -1718,6 +1792,7 @@ function Clothing() {
 
             if (!viewer) return;
             syncCloseButton();
+            syncCaption();
 
             if (viewer.phase === 'closing' && viewer.closeDone) {
                 const live = poseFromThumb(liveThumb(viewer.slot), viewer.layout);
@@ -1785,6 +1860,9 @@ function Clothing() {
             configureFlyer(activeFlyer, layout, spec);
             if (reducedMotion) activeFlyer.root.style.opacity = '0';
             placeOverlay(reducedMotion ? to : from, layout);
+            caption.style.opacity = '0';
+            setCaptionText(spec);
+            placeCaption(layout);
             overlay.hidden = false;
             closeBtn.hidden = false;
             closeBtn.style.opacity = '0';
@@ -1876,6 +1954,9 @@ function Clothing() {
             viewer.largeShown = viewer.largeFromStart;
             if (switchedLarge) attachLargeToFlyer(node, switchedLarge);
             placeOverlay(from, layout);
+            caption.style.opacity = '0';
+            setCaptionText(spec);
+            placeCaption(layout);
             node.root.hidden = false;
             sizeFlyer(node, layout);
             if (!viewer.largeReady) armLarge(node, spec);
@@ -1899,6 +1980,7 @@ function Clothing() {
                 : Math.max(220, duration * Math.max(0.35, opened));
             viewer.closeDone = false;
             viewer.thumbOpacity = 0;
+            caption.style.opacity = '0';
             closeBtn.style.opacity = '0';
             closeBtn.style.pointerEvents = 'none';
             activeFlyer.root.style.willChange = 'transform, opacity';
@@ -2375,6 +2457,57 @@ function Clothing() {
             return null;
         };
 
+        // The label is a child of the tile, so it rides the tile's transform
+        // instead of needing its own work on every frame.
+        const ensureLabel = (slot) => {
+            if (!slot.labelEl) {
+                const label = document.createElement('span');
+                label.className = 'stream-label';
+                label.setAttribute('aria-hidden', 'true');
+                const title = document.createElement('i');
+                title.className = 'stream-label-title';
+                const year = document.createElement('span');
+                year.className = 'stream-label-year';
+                label.append(title, year);
+                slot.labelEl = label;
+                slot.labelTitleEl = title;
+                slot.labelYearEl = year;
+            }
+            if (slot.labelEl.parentNode !== slot.el) slot.el.appendChild(slot.labelEl);
+            return slot.labelEl;
+        };
+
+        const alignLabel = (slot) => {
+            const label = slot.labelEl;
+            if (!label || !(slot.labelWidth > 0)) return;
+            const pastEdge = slot.x + slot.labelWidth > viewportWidth - LABEL_EDGE_PAD_PX;
+            if (slot.labelPastEdge !== pastEdge) {
+                slot.labelPastEdge = pastEdge;
+                label.classList.toggle('is-label-right', pastEdge);
+            }
+            // Keep the start of the text on screen for a tile still entering.
+            const shift = !pastEdge && slot.x < LABEL_EDGE_PAD_PX
+                ? Math.round(LABEL_EDGE_PAD_PX - slot.x)
+                : 0;
+            if (slot.labelShift === shift) return;
+            slot.labelShift = shift;
+            label.style.left = shift ? `${shift}px` : '';
+        };
+
+        // Written when the hover starts, so a recycled tile can never show the
+        // title of the photo it used to hold.
+        const syncLabel = (slot) => {
+            const info = photoLabelFor(slot.spec);
+            if (!info && !slot.labelEl) return;
+            const label = ensureLabel(slot);
+            slot.labelTitleEl.textContent = info ? info.title : '';
+            slot.labelYearEl.textContent = info && info.year ? `, ${info.year}` : '';
+            slot.labelWidth = info ? label.offsetWidth : 0;
+            slot.labelPastEdge = null;
+            slot.labelShift = null;
+            alignLabel(slot);
+        };
+
         const syncHover = () => {
             if (!fineHover || (!pointerInside && !hoverSlot)) return;
             if (viewer && viewer.phase !== 'open') {
@@ -2385,11 +2518,15 @@ function Clothing() {
                 return;
             }
             const slot = pointerInside ? slotUnderPointer() : null;
-            if (slot === hoverSlot) return;
+            if (slot === hoverSlot) {
+                if (hoverSlot) alignLabel(hoverSlot);
+                return;
+            }
             if (hoverSlot) hoverSlot.el.classList.remove('is-hovered');
             hoverSlot = slot;
             if (!slot) return;
             slot.el.style.setProperty('--stream-outline', `${outlineFor(slot)}px`);
+            syncLabel(slot);
             slot.el.classList.add('is-hovered');
         };
 
@@ -2621,6 +2758,7 @@ function Clothing() {
                     viewer.layout = layoutViewer(viewer.spec, viewer.rowBases, viewer.slot);
                     viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
                     if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
+                    placeCaption(viewer.layout);
                     cacheStreamOrigin();
                     if (fineHover && hoverSlot) {
                         hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
@@ -2656,6 +2794,7 @@ function Clothing() {
                 mountRange();
                 if (fineHover && hoverSlot) {
                     hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
+                    syncLabel(hoverSlot);
                 }
                 syncPlayback();
             });
@@ -2694,6 +2833,7 @@ function Clothing() {
             overlay.remove();
             flyers.forEach((node) => node.root.remove());
             closeBtn.remove();
+            caption.remove();
             pool.forEach((slot) => slot.el.remove());
             decodedSpecs.forEach((spec) => {
                 if (spec?.objectUrl) URL.revokeObjectURL(spec.objectUrl);

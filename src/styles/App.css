@@ -87,6 +87,11 @@ html {
       #251f19 68%,
       #16120f 100%
     );
+
+  /* Body copy, as used by the resume bullets and paragraphs. */
+  --body-copy-font-family: 'Special Elite', monospace;
+  --body-copy-color: rgba(255, 255, 255, 0.88);
+  --body-copy-letter-spacing: normal;
 }
 
 body {

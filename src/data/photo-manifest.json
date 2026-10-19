@@ -1672,5 +1672,68 @@
     "displayWidth": 493,
     "displayHeight": 500,
     "aspect": 0.986
+  },
+  {
+    "number": 188,
+    "width": 500,
+    "height": 333,
+    "orientation": 1,
+    "displayWidth": 500,
+    "displayHeight": 333,
+    "aspect": 1.501502
+  },
+  {
+    "number": 189,
+    "width": 500,
+    "height": 333,
+    "orientation": 1,
+    "displayWidth": 500,
+    "displayHeight": 333,
+    "aspect": 1.501502
+  },
+  {
+    "number": 190,
+    "width": 333,
+    "height": 500,
+    "orientation": 1,
+    "displayWidth": 333,
+    "displayHeight": 500,
+    "aspect": 0.666
+  },
+  {
+    "number": 191,
+    "width": 333,
+    "height": 500,
+    "orientation": 1,
+    "displayWidth": 333,
+    "displayHeight": 500,
+    "aspect": 0.666
+  },
+  {
+    "number": 192,
+    "width": 500,
+    "height": 333,
+    "orientation": 1,
+    "displayWidth": 500,
+    "displayHeight": 333,
+    "aspect": 1.501502
+  },
+  {
+    "number": 193,
+    "width": 500,
+    "height": 333,
+    "orientation": 1,
+    "displayWidth": 500,
+    "displayHeight": 333,
+    "aspect": 1.501502
+  },
+  {
+    "number": 194,
+    "width": 500,
+    "height": 333,
+    "orientation": 1,
+    "displayWidth": 500,
+    "displayHeight": 333,
+    "aspect": 1.501502
   }
 ]
