@@ -1,0 +1,52 @@
+[
+  {
+    "title": "3D Design",
+    "items": [
+      { "type": "color", "color": "#FFFFFF" },
+      { "type": "color", "color": "#E4572E" },
+      { "type": "color", "color": "#F4A259" },
+      { "type": "color", "color": "#E8C547" },
+      { "type": "color", "color": "#8CB369" },
+      { "type": "color", "color": "#5B8E7D" },
+      { "type": "color", "color": "#6A8EAE" },
+      { "type": "color", "color": "#C9ADA7" }
+    ]
+  },
+  {
+    "title": "Graphic Design",
+    "items": [
+      { "type": "color", "color": "#FFFFFF" },
+      { "type": "color", "color": "#BC4B51" },
+      { "type": "color", "color": "#D9BBA0" },
+      { "type": "color", "color": "#E8C547" },
+      { "type": "color", "color": "#7E9181" },
+      { "type": "color", "color": "#5B8E7D" },
+      { "type": "color", "color": "#9A8FB8" }
+    ]
+  },
+  {
+    "title": "Other",
+    "items": [
+      { "type": "color", "color": "#FFFFFF" },
+      { "type": "color", "color": "#6A8EAE" },
+      { "type": "color", "color": "#8CB369" },
+      { "type": "color", "color": "#F4A259" },
+      { "type": "color", "color": "#C07A5C" },
+      { "type": "color", "color": "#9A8FB8" }
+    ]
+  },
+  {
+    "title": "Stack 4",
+    "items": [
+      { "type": "color", "color": "#FFFFFF" },
+      { "type": "color", "color": "#E4572E" },
+      { "type": "color", "color": "#E8C547" },
+      { "type": "color", "color": "#8CB369" },
+      { "type": "color", "color": "#5B8E7D" },
+      { "type": "color", "color": "#6A8EAE" },
+      { "type": "color", "color": "#9A8FB8" },
+      { "type": "color", "color": "#D9BBA0" },
+      { "type": "color", "color": "#BC4B51" }
+    ]
+  }
+]

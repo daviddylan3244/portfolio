@@ -1,456 +1,224 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/Header.css';
 import '../styles/Portfolio.css';
 import '../styles/GraffitiGallery.css';
+import designStacks from '../data/design-stacks.json';
 
-const IMAGE_URLS = [
-    '/Product-design/Coinsorter.png',
-    '/Product-design/Coinsorter2.png',
-    '/Product-design/jackethook.png',
-    '/Product-design/jackethook2.png',
-    '/Product-design/WindowShelf.png',
-    '/Product-design/WindowShelf2.png',
-    '/Product-design/Goya-1.png',
-    '/Product-design/Goya-2.png',
-    '/Product-design/Graphic-Design-34.jpg',
-    '/Product-design/Graphic-Design-35.jpg',
-    '/Product-design/Graphic-Design-36.jpg',
-    '/Product-design/Shelf-Sidex.png',
-    '/Product-design/shelfWheels-Sidex.png',
-    '/Product-design/Box-Sidex.png',
-];
+const CAROUSEL_INTERVAL_MS = 1000;
+const SWAP_MS = 450;
+const FAN_MS = 300;
+const CLOSE_MS = 380;
+const OPEN_STAGGER_MS = 40;
+const TWIST_STEP_DEG = 3.5;
+const TWIST_MAX_DEG = 25;
 
-const GRAPHIC_START = 8;
-const GRAPHIC_COUNT = 3;
-const NATURAL_SIZE = {
-    8: { width: 2000, height: 1499 },
-    9: { width: 2000, height: 1333 },
-    10: { width: 2000, height: 1333 },
+const poseFor = (depth, fanned) => {
+    if (!fanned) return { x: 0, y: 0, r: 0 };
+    return {
+        x: 0,
+        y: 0,
+        r: Math.min(TWIST_MAX_DEG, depth * TWIST_STEP_DEG),
+    };
 };
 
-const GAP = 10;
-const MIN_SIZE = 90;
-const CANVAS_BOTTOM_PADDING = 320;
-const MIN_CANVAS_HEIGHT = 1200;
-const DOUBLE_TAP_DELAY = 300;
+const identityOrder = (stack) => stack.items.map((_, index) => index);
 
-const DESKTOP_BASE = 350;
+const advanceOrder = (order) => [...order.slice(1), order[0]];
 
-function bannerSize(index, maxWidth) {
-    const naturalWidth = index === 6 ? 1108 : 1363;
-    const naturalHeight = index === 6 ? 274 : 337;
-    const width = Math.min(naturalWidth, maxWidth);
-    return { width, height: width * (naturalHeight / naturalWidth) };
-}
-
-function isGraphic(index) {
-    return index >= GRAPHIC_START && index < GRAPHIC_START + GRAPHIC_COUNT;
-}
-
-function graphicCardSize(index, cardWidth) {
-    const natural = NATURAL_SIZE[index];
-    return { width: cardWidth, height: cardWidth * (natural.height / natural.width) };
-}
-
-function buildDesktopLayout(viewportWidth) {
-    const baseWidth = DESKTOP_BASE;
-    const maxWidth = Math.max(MIN_SIZE, viewportWidth - 40);
-    const gridStartX = Math.max(
-        20,
-        (viewportWidth - baseWidth * 3 - GAP * 2) / 2
-    );
-    const gridRowHeight = baseWidth * 0.75 + GAP;
-
-    const images = IMAGE_URLS.map((src, index) => {
-        const isBanner = index === 6 || index === 7;
-
-        if (isBanner) {
-            const { width, height } = bannerSize(index, maxWidth);
-            return {
-                id: index,
-                src,
-                width,
-                height,
-                x: Math.max(20, (viewportWidth - width) / 2),
-                y: 80 + gridRowHeight * 2 + (index - 6) * (height + GAP),
-                zIndex: 1,
-            };
-        }
-
-        if (index < 6) {
-            const column = index % 3;
-            const row = Math.floor(index / 3);
-            return {
-                id: index,
-                src,
-                width: baseWidth,
-                height: baseWidth * 0.75,
-                x: gridStartX + column * (baseWidth + GAP),
-                y: 80 + row * gridRowHeight,
-                zIndex: 1,
-            };
-        }
-
-        return null;
-    });
-
-    const secondBanner = images[7];
-    const graphicY = secondBanner.y + secondBanner.height + GAP;
-    let graphicRowHeight = 0;
-
-    for (let offset = 0; offset < GRAPHIC_COUNT; offset += 1) {
-        const index = GRAPHIC_START + offset;
-        const { width, height } = graphicCardSize(index, baseWidth);
-        graphicRowHeight = Math.max(graphicRowHeight, height);
-        images[index] = {
-            id: index,
-            src: IMAGE_URLS[index],
-            width,
-            height,
-            x: gridStartX + offset * (baseWidth + GAP),
-            y: graphicY,
-            zIndex: 1,
-        };
+function isKeyboardFocus(target) {
+    try {
+        return target.matches(':focus-visible');
+    } catch (err) {
+        return true;
     }
+}
 
-    const lowerY = graphicY + graphicRowHeight + GAP;
-    for (let index = GRAPHIC_START + GRAPHIC_COUNT; index < IMAGE_URLS.length; index += 1) {
-        const column = index - (GRAPHIC_START + GRAPHIC_COUNT);
-        images[index] = {
-            id: index,
-            src: IMAGE_URLS[index],
-            width: baseWidth,
-            height: baseWidth * 0.75,
-            x: gridStartX + column * (baseWidth + GAP),
-            y: lowerY,
-            zIndex: 1,
-        };
+function StackCardFace({ item, index, title }) {
+    if (item.type === 'image' && item.src) {
+        return (
+            <img
+                className="stack-card-image"
+                src={item.src}
+                alt={item.title || `${title} ${index + 1}`}
+                draggable={false}
+                loading="lazy"
+            />
+        );
     }
-
-    return images;
-}
-
-function buildFittingLayout(viewportWidth) {
-    const columns = viewportWidth >= 640 ? 2 : 1;
-    const maxWidth = Math.max(MIN_SIZE, viewportWidth - 40);
-    const baseWidth = Math.max(
-        MIN_SIZE,
-        Math.min(320, Math.floor((maxWidth - GAP * (columns - 1)) / columns))
-    );
-    const gridWidth = baseWidth * columns + GAP * (columns - 1);
-    const startX = Math.max(0, (viewportWidth - gridWidth) / 2);
-    const images = [];
-    let y = 16;
-    let col = 0;
-    let rowHeight = 0;
-
-    IMAGE_URLS.forEach((src, index) => {
-        const isBanner = index === 6 || index === 7;
-        if (isBanner) {
-            if (col !== 0) {
-                y += rowHeight;
-                col = 0;
-                rowHeight = 0;
-            }
-            const { width, height } = bannerSize(index, maxWidth);
-            images.push({
-                id: index,
-                src,
-                width,
-                height,
-                x: Math.max(0, (viewportWidth - width) / 2),
-                y,
-                zIndex: 1,
-            });
-            y += height + GAP;
-            return;
-        }
-
-        const width = Math.min(baseWidth, maxWidth);
-        const height = isGraphic(index)
-            ? graphicCardSize(index, width).height
-            : width * 0.75;
-        images.push({
-            id: index,
-            src,
-            width,
-            height,
-            x: startX + col * (width + GAP),
-            y,
-            zIndex: 1,
-        });
-        rowHeight = Math.max(rowHeight, height + GAP);
-        col += 1;
-        if (col >= columns || index === GRAPHIC_START + GRAPHIC_COUNT - 1) {
-            y += rowHeight;
-            col = 0;
-            rowHeight = 0;
-        }
-    });
-
-    return images;
-}
-
-function buildInitialLayout() {
-    const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
-    const desktopGrid = DESKTOP_BASE * 3 + GAP * 2;
-    if (viewportWidth >= desktopGrid + 40) return buildDesktopLayout(viewportWidth);
-    return buildFittingLayout(viewportWidth);
-}
-
-function canvasHeightFor(images) {
-    const lowestEdge = images.reduce(
-        (lowest, image) => Math.max(lowest, image.y + image.height),
-        0
-    );
-    return Math.max(MIN_CANVAS_HEIGHT, lowestEdge + CANVAS_BOTTOM_PADDING);
-}
-
-const GalleryImage = React.memo(function GalleryImage({
-    image,
-    isFocused,
-    anyFocused,
-    zCounterRef,
-    canvasRef,
-    onCommit,
-    onToggleFocus,
-}) {
-    const nodeRef = useRef(null);
-    const lastTapRef = useRef(0);
-    const poseRef = useRef({
-        x: image.x,
-        y: image.y,
-        width: image.width,
-        height: image.height,
-    });
-    const dragRef = useRef(null);
-    const resizeRef = useRef(null);
-
-    // Keep the live pose in sync if React remounts (reset) or commits.
-    const raise = () => {
-        const node = nodeRef.current;
-        if (!node) return;
-        zCounterRef.current += 1;
-        node.style.zIndex = String(zCounterRef.current);
-    };
-
-    const applyPose = () => {
-        const node = nodeRef.current;
-        if (!node) return;
-        const { x, y, width, height } = poseRef.current;
-        node.style.transform = `translate3d(${x}px, ${y}px, 0)`;
-        node.style.width = `${width}px`;
-        node.style.height = `${height}px`;
-    };
-
-    const growCanvasIfNeeded = () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const needed = poseRef.current.y + poseRef.current.height + CANVAS_BOTTOM_PADDING;
-        const current = parseFloat(canvas.style.height) || canvas.offsetHeight;
-        if (needed > current) {
-            canvas.style.height = `${needed}px`;
-        }
-    };
-
-    const startDrag = (event) => {
-        if (anyFocused || event.button === 2) return;
-        if (event.target.closest('.resize-handle')) return;
-
-        event.preventDefault();
-        raise();
-
-        const node = nodeRef.current;
-        node.classList.add('is-dragging');
-        node.setPointerCapture(event.pointerId);
-
-        dragRef.current = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            originX: poseRef.current.x,
-            originY: poseRef.current.y,
-            frame: 0,
-        };
-
-        const onMove = (moveEvent) => {
-            if (!dragRef.current || moveEvent.pointerId !== dragRef.current.pointerId) return;
-            moveEvent.preventDefault();
-
-            const nextX = dragRef.current.originX + (moveEvent.clientX - dragRef.current.startX);
-            const nextY = Math.max(0, dragRef.current.originY + (moveEvent.clientY - dragRef.current.startY));
-            poseRef.current.x = nextX;
-            poseRef.current.y = nextY;
-
-            if (dragRef.current.frame) return;
-            dragRef.current.frame = requestAnimationFrame(() => {
-                if (!dragRef.current) return;
-                dragRef.current.frame = 0;
-                applyPose();
-                growCanvasIfNeeded();
-            });
-        };
-
-        const onUp = (upEvent) => {
-            if (!dragRef.current || upEvent.pointerId !== dragRef.current.pointerId) return;
-            cancelAnimationFrame(dragRef.current.frame);
-            dragRef.current = null;
-            node.classList.remove('is-dragging');
-            try {
-                node.releasePointerCapture(upEvent.pointerId);
-            } catch {
-                // Capture may already be released.
-            }
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            window.removeEventListener('pointercancel', onUp);
-            applyPose();
-            onCommit(image.id, { ...poseRef.current });
-        };
-
-        window.addEventListener('pointermove', onMove, { passive: false });
-        window.addEventListener('pointerup', onUp);
-        window.addEventListener('pointercancel', onUp);
-    };
-
-    const startResize = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (anyFocused) return;
-
-        raise();
-        const node = nodeRef.current;
-        node.classList.add('is-dragging');
-        node.setPointerCapture(event.pointerId);
-
-        const aspectRatio = poseRef.current.width / poseRef.current.height;
-        resizeRef.current = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            startWidth: poseRef.current.width,
-            startHeight: poseRef.current.height,
-            aspectRatio,
-            frame: 0,
-        };
-
-        const onMove = (moveEvent) => {
-            if (!resizeRef.current || moveEvent.pointerId !== resizeRef.current.pointerId) return;
-            moveEvent.preventDefault();
-
-            const deltaX = moveEvent.clientX - resizeRef.current.startX;
-            const deltaY = moveEvent.clientY - resizeRef.current.startY;
-            const delta =
-                Math.abs(deltaX) > Math.abs(deltaY)
-                    ? deltaX
-                    : deltaY * resizeRef.current.aspectRatio;
-            const width = Math.max(MIN_SIZE, resizeRef.current.startWidth + delta);
-            poseRef.current.width = width;
-            poseRef.current.height = width / resizeRef.current.aspectRatio;
-
-            if (resizeRef.current.frame) return;
-            resizeRef.current.frame = requestAnimationFrame(() => {
-                if (!resizeRef.current) return;
-                resizeRef.current.frame = 0;
-                applyPose();
-                growCanvasIfNeeded();
-            });
-        };
-
-        const onUp = (upEvent) => {
-            if (!resizeRef.current || upEvent.pointerId !== resizeRef.current.pointerId) return;
-            cancelAnimationFrame(resizeRef.current.frame);
-            resizeRef.current = null;
-            node.classList.remove('is-dragging');
-            try {
-                node.releasePointerCapture(upEvent.pointerId);
-            } catch {
-                // Capture may already be released.
-            }
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            window.removeEventListener('pointercancel', onUp);
-            applyPose();
-            onCommit(image.id, { ...poseRef.current });
-        };
-
-        window.addEventListener('pointermove', onMove, { passive: false });
-        window.addEventListener('pointerup', onUp);
-        window.addEventListener('pointercancel', onUp);
-    };
-
-    const handleTouchStart = () => {
-        const now = Date.now();
-        if (lastTapRef.current && now - lastTapRef.current < DOUBLE_TAP_DELAY) {
-            onToggleFocus(image.id);
-            lastTapRef.current = 0;
-            return;
-        }
-        lastTapRef.current = now;
-    };
-
     return (
         <div
-            ref={nodeRef}
-            className={`draggable-image-container${isFocused ? ' focused' : ''}`}
-            style={{
-                position: 'absolute',
-                left: 0,
-                top: 0,
-                width: `${image.width}px`,
-                height: `${image.height}px`,
-                transform: `translate3d(${image.x}px, ${image.y}px, 0)`,
-                zIndex: isFocused ? 2000 : image.zIndex,
-            }}
-            onPointerDown={startDrag}
-            onDoubleClick={() => onToggleFocus(image.id)}
-            onTouchStart={handleTouchStart}
-        >
-            <div className="image-wrapper">
-                <img
-                    src={image.src}
-                    alt={`Product design ${image.id + 1}`}
-                    className="gallery-image"
-                    draggable={false}
-                    loading="lazy"
-                    width={Math.round(image.width)}
-                    height={Math.round(image.height)}
-                />
-                {!anyFocused && (
-                    <div
-                        className="resize-handle"
-                        onPointerDown={startResize}
-                        role="presentation"
-                    >
-                        <div className="resize-arrow" />
-                    </div>
-                )}
-            </div>
-        </div>
+            className="stack-card-color"
+            style={{ backgroundColor: item.color || '#FFFFFF' }}
+        />
     );
-});
+}
 
 const GraffitiGallery = () => {
     const navigate = useNavigate();
-    const [images, setImages] = useState(buildInitialLayout);
-    const [focusedImage, setFocusedImage] = useState(null);
-    const [layoutVersion, setLayoutVersion] = useState(0);
-    const zCounterRef = useRef(10);
-    const canvasRef = useRef(null);
+    const stacks = designStacks;
 
-    const commitImage = useCallback((id, pose) => {
-        setImages((previous) =>
-            previous.map((image) => (image.id === id ? { ...image, ...pose } : image))
+    const [orders, setOrders] = useState(() => stacks.map(identityOrder));
+    const [fannedStack, setFannedStack] = useState(null);
+    const [cyclingStack, setCyclingStack] = useState(null);
+    const [cardMs, setCardMs] = useState(FAN_MS);
+    const [openStack, setOpenStack] = useState(null);
+    const [isLeaving, setIsLeaving] = useState(false);
+    const [origin, setOrigin] = useState({ x: 0, y: 0 });
+
+    const buttonsRef = useRef([]);
+    const overlayRef = useRef(null);
+    const closeRef = useRef(null);
+    const leaveTimerRef = useRef(0);
+    const lastSwapRef = useRef(0);
+    const cyclingRef = useRef(null);
+    cyclingRef.current = cyclingStack;
+
+    const motion = useMemo(
+        () => ({
+            fineHover:
+                typeof window !== 'undefined'
+                && window.matchMedia('(hover: hover) and (pointer: fine)').matches,
+            reduced:
+                typeof window !== 'undefined'
+                && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+        }),
+        []
+    );
+
+    const isOpen = Number.isInteger(openStack);
+
+    const beginHover = (stackIndex) => {
+        if (motion.reduced || isOpen) return;
+        window.clearTimeout(leaveTimerRef.current);
+        setCardMs(FAN_MS);
+        setFannedStack(stackIndex);
+        if (motion.fineHover) setCyclingStack(stackIndex);
+    };
+
+    const settleStack = useCallback((stackIndex) => {
+        setCardMs(FAN_MS);
+        setFannedStack((current) => (current === stackIndex ? null : current));
+        setCyclingStack((current) => (current === stackIndex ? null : current));
+    }, []);
+
+    const endHover = (stackIndex) => {
+        if (motion.reduced || isOpen) return;
+        setCyclingStack((current) => (current === stackIndex ? null : current));
+        const remaining = Math.max(0, lastSwapRef.current + SWAP_MS - performance.now());
+        window.clearTimeout(leaveTimerRef.current);
+        leaveTimerRef.current = window.setTimeout(() => settleStack(stackIndex), remaining);
+    };
+
+    useEffect(() => {
+        if (cyclingStack === null || isOpen || motion.reduced) return undefined;
+        const id = window.setInterval(() => {
+            if (cyclingRef.current !== cyclingStack) return;
+            setCardMs(SWAP_MS);
+            lastSwapRef.current = performance.now();
+            setOrders((previous) =>
+                previous.map((order, index) =>
+                    index === cyclingStack ? advanceOrder(order) : order
+                )
+            );
+        }, CAROUSEL_INTERVAL_MS);
+        return () => window.clearInterval(id);
+    }, [cyclingStack, isOpen, motion.reduced]);
+
+    const finishClose = useCallback(() => {
+        const trigger = Number.isInteger(openStack) ? buttonsRef.current[openStack] : null;
+        setIsLeaving(false);
+        setOpenStack(null);
+        if (trigger) trigger.focus();
+    }, [openStack]);
+
+    const closeStack = useCallback(() => {
+        if (!isOpen || isLeaving) return;
+        if (motion.reduced) {
+            finishClose();
+            return;
+        }
+        setIsLeaving(true);
+        window.clearTimeout(leaveTimerRef.current);
+        leaveTimerRef.current = window.setTimeout(finishClose, CLOSE_MS);
+    }, [isOpen, isLeaving, motion.reduced, finishClose]);
+
+    useEffect(() => () => window.clearTimeout(leaveTimerRef.current), []);
+
+    useEffect(() => {
+        if (!isOpen) return undefined;
+        const { body } = document;
+        const previousOverflow = body.style.overflow;
+        const previousPadding = body.style.paddingRight;
+        const gutter = window.innerWidth - document.documentElement.clientWidth;
+        body.style.overflow = 'hidden';
+        if (gutter > 0) body.style.paddingRight = `${gutter}px`;
+        const node = closeRef.current || overlayRef.current;
+        if (node) node.focus();
+        return () => {
+            body.style.overflow = previousOverflow;
+            body.style.paddingRight = previousPadding;
+        };
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return undefined;
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') closeStack();
+        };
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, [isOpen, closeStack]);
+
+    const onOverlayKeyDown = (event) => {
+        if (event.key !== 'Tab') return;
+        const overlay = overlayRef.current;
+        if (!overlay) return;
+        const focusable = overlay.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
         );
-    }, []);
+        if (!focusable.length) {
+            event.preventDefault();
+            return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
 
-    const toggleFocus = useCallback((id) => {
-        setFocusedImage((current) => (current === id ? null : id));
-    }, []);
+    const onOverlayClick = (event) => {
+        if (event.target.closest('.stack-grid-card')) return;
+        if (event.target.closest('.stack-overlay-close')) return;
+        if (event.target.closest('.stack-overlay-title')) return;
+        closeStack();
+    };
+
+    const openFromButton = (stackIndex, button) => {
+        window.clearTimeout(leaveTimerRef.current);
+        setCyclingStack(null);
+        setFannedStack(null);
+        const rect = button?.getBoundingClientRect();
+        if (rect) {
+            setOrigin({
+                x: rect.left + rect.width / 2 - window.innerWidth / 2,
+                y: rect.top + rect.height / 2 - window.innerHeight / 2,
+            });
+        } else {
+            setOrigin({ x: 0, y: 0 });
+        }
+        setOpenStack(stackIndex);
+    };
+
+    const openDetail = isOpen ? stacks[openStack] : null;
 
     return (
-        <div className="bg-level-3" style={{ minHeight: '100vh', color: 'white' }}>
+        <div className="bg-level-3 design-page">
             <div className="header-container">
                 <div className="header-nav">
                     <button className="header-button" onClick={() => navigate('/portfolio')}>
@@ -463,43 +231,118 @@ const GraffitiGallery = () => {
                 <span className="header-logo" onClick={() => navigate('/')}>
                     Return Home
                 </span>
-                <button
-                    className="header-button gallery-reset"
-                    onClick={() => {
-                        zCounterRef.current = 10;
-                        setFocusedImage(null);
-                        setImages(buildInitialLayout());
-                        setLayoutVersion((version) => version + 1);
-                    }}
-                >
-                    Reset layout
-                </button>
             </div>
 
-            <div className="gallery-viewport">
-                <div
-                    ref={canvasRef}
-                    className="gallery-canvas"
-                    style={{ height: `${canvasHeightFor(images)}px` }}
-                >
-                    {images.map((image) => (
-                        <GalleryImage
-                            key={`${layoutVersion}-${image.id}`}
-                            image={image}
-                            isFocused={focusedImage === image.id}
-                            anyFocused={focusedImage !== null}
-                            zCounterRef={zCounterRef}
-                            canvasRef={canvasRef}
-                            onCommit={commitImage}
-                            onToggleFocus={toggleFocus}
-                        />
-                    ))}
+            <div className={`design-stacks${isOpen ? ' is-dimmed' : ''}`}>
+                <div className="design-stacks-grid">
+                    {stacks.map((stack, stackIndex) => {
+                        const order = orders[stackIndex];
+                        const depths = new Map(order.map((item, depth) => [item, depth]));
+                        const fanned = fannedStack === stackIndex && !isOpen && !motion.reduced;
+                        return (
+                            <button
+                                type="button"
+                                key={stack.title}
+                                ref={(node) => {
+                                    buttonsRef.current[stackIndex] = node;
+                                }}
+                                className={[
+                                    'design-stack',
+                                    fanned ? 'is-fanned' : '',
+                                    isOpen && stackIndex !== openStack ? 'is-background' : '',
+                                ].filter(Boolean).join(' ')}
+                                style={{ '--card-ms': `${fanned ? cardMs : FAN_MS}ms` }}
+                                aria-label={`${stack.title}, ${stack.items.length} items`}
+                                onMouseEnter={() => {
+                                    if (!motion.fineHover) return;
+                                    beginHover(stackIndex);
+                                }}
+                                onMouseLeave={() => {
+                                    if (!motion.fineHover) return;
+                                    endHover(stackIndex);
+                                }}
+                                onFocus={(event) => {
+                                    if (!isKeyboardFocus(event.target)) return;
+                                    beginHover(stackIndex);
+                                }}
+                                onBlur={() => endHover(stackIndex)}
+                                onClick={(event) => openFromButton(stackIndex, event.currentTarget)}
+                            >
+                                <span className="design-stack-cards">
+                                    {stack.items.map((item, itemIndex) => {
+                                        const depth = depths.get(itemIndex) ?? 0;
+                                        const pose = poseFor(depth, fanned);
+                                        return (
+                                            <span
+                                                key={itemIndex}
+                                                className="stack-card"
+                                                style={{
+                                                    zIndex: stack.items.length - depth,
+                                                    transform: `translate3d(${pose.x}px, ${pose.y}px, 0) rotate(${pose.r}deg)`,
+                                                }}
+                                            >
+                                                <StackCardFace
+                                                    item={item}
+                                                    index={itemIndex}
+                                                    title={stack.title}
+                                                />
+                                            </span>
+                                        );
+                                    })}
+                                </span>
+                                <span className="design-stack-title">{stack.title}</span>
+                            </button>
+                        );
+                    })}
                 </div>
             </div>
 
-            {focusedImage !== null && (
-                <div className="overlay" onClick={() => setFocusedImage(null)} />
-            )}
+            {openDetail ? (
+                <div
+                    className={`stack-overlay${isLeaving ? ' is-leaving' : ''}${motion.reduced ? ' is-reduced' : ''}`}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={openDetail.title}
+                    ref={overlayRef}
+                    tabIndex={-1}
+                    onClick={onOverlayClick}
+                    onKeyDown={onOverlayKeyDown}
+                    style={{
+                        '--from-x': `${origin.x}px`,
+                        '--from-y': `${origin.y}px`,
+                    }}
+                >
+                    <div className="stack-overlay-inner">
+                        <div className="stack-overlay-head">
+                            <h2 className="stack-overlay-title">{openDetail.title}</h2>
+                            <button
+                                type="button"
+                                className="stack-overlay-close"
+                                aria-label="Close"
+                                ref={closeRef}
+                                onClick={closeStack}
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <div className="stack-overlay-grid">
+                            {openDetail.items.map((item, itemIndex) => (
+                                <div
+                                    key={itemIndex}
+                                    className="stack-grid-card"
+                                    style={{ '--delay': `${itemIndex * OPEN_STAGGER_MS}ms` }}
+                                >
+                                    <StackCardFace
+                                        item={item}
+                                        index={itemIndex}
+                                        title={openDetail.title}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 };
