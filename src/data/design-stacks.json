@@ -1,52 +1,43 @@
 [
   {
     "title": "3D Design",
+    "cardShape": "square",
     "items": [
-      { "type": "color", "color": "#FFFFFF" },
-      { "type": "color", "color": "#E4572E" },
-      { "type": "color", "color": "#F4A259" },
-      { "type": "color", "color": "#E8C547" },
-      { "type": "color", "color": "#8CB369" },
-      { "type": "color", "color": "#5B8E7D" },
-      { "type": "color", "color": "#6A8EAE" },
-      { "type": "color", "color": "#C9ADA7" }
+      { "type": "image", "src": "/Product-design/3d-Design1.1.png", "title": "", "width": 1129, "height": 994 },
+      { "type": "image", "src": "/Product-design/3d-Design1.2.png", "title": "", "width": 1216, "height": 996 },
+      { "type": "image", "src": "/Product-design/3d-Design2.1.png", "title": "", "width": 1236, "height": 910 },
+      { "type": "image", "src": "/Product-design/3d-Design2.2.png", "title": "", "width": 1228, "height": 924 },
+      { "type": "image", "src": "/Product-design/3d-Design3.1.png", "title": "", "width": 1356, "height": 946 },
+      { "type": "image", "src": "/Product-design/3d-Design3.2.png", "title": "", "width": 1290, "height": 880 }
     ]
   },
   {
     "title": "Graphic Design",
+    "cardShape": "fixed",
+    "cardAspect": 1.5,
+    "fit": "cover",
     "items": [
-      { "type": "color", "color": "#FFFFFF" },
-      { "type": "color", "color": "#BC4B51" },
-      { "type": "color", "color": "#D9BBA0" },
-      { "type": "color", "color": "#E8C547" },
-      { "type": "color", "color": "#7E9181" },
-      { "type": "color", "color": "#5B8E7D" },
-      { "type": "color", "color": "#9A8FB8" }
+      { "type": "image", "src": "/Product-design/Graphic-Design1.jpg", "title": "", "width": 2000, "height": 1333 },
+      { "type": "image", "src": "/Product-design/Graphic-Design2.jpg", "title": "", "width": 2000, "height": 1333 },
+      { "type": "image", "src": "/Product-design/Graphic-Design5.jpg", "title": "", "width": 2000, "height": 1499 }
     ]
   },
   {
     "title": "Other",
+    "cardShape": "natural",
+    "frame": "thin-white",
     "items": [
-      { "type": "color", "color": "#FFFFFF" },
-      { "type": "color", "color": "#6A8EAE" },
-      { "type": "color", "color": "#8CB369" },
-      { "type": "color", "color": "#F4A259" },
-      { "type": "color", "color": "#C07A5C" },
-      { "type": "color", "color": "#9A8FB8" }
+      { "type": "image", "src": "/Product-design/MTPro1.png", "title": "", "width": 1174, "height": 1024 },
+      { "type": "image", "src": "/Product-design/MTPro2.png", "title": "", "width": 1056, "height": 986 },
+      { "type": "image", "src": "/Product-design/MTPro3.png", "title": "", "width": 1093, "height": 941 }
     ]
   },
   {
-    "title": "Stack 4",
+    "title": "Billboard Design",
+    "cardShape": "natural",
     "items": [
-      { "type": "color", "color": "#FFFFFF" },
-      { "type": "color", "color": "#E4572E" },
-      { "type": "color", "color": "#E8C547" },
-      { "type": "color", "color": "#8CB369" },
-      { "type": "color", "color": "#5B8E7D" },
-      { "type": "color", "color": "#6A8EAE" },
-      { "type": "color", "color": "#9A8FB8" },
-      { "type": "color", "color": "#D9BBA0" },
-      { "type": "color", "color": "#BC4B51" }
+      { "type": "image", "src": "/Product-design/Graphic-Design3.png", "title": "", "width": 1363, "height": 337 },
+      { "type": "image", "src": "/Product-design/Graphic-Design4.png", "title": "", "width": 1108, "height": 274 }
     ]
   }
 ]

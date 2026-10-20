@@ -26,6 +26,32 @@ const identityOrder = (stack) => stack.items.map((_, index) => index);
 
 const advanceOrder = (order) => [...order.slice(1), order[0]];
 
+const aspectOf = (item) => {
+    const width = Number(item?.width);
+    const height = Number(item?.height);
+    if (width > 0 && height > 0) return width / height;
+    return 1;
+};
+
+const pileFit = (item, stack) => {
+    if (stack.cardShape === 'square') return { w: 1, h: 1 };
+    const aspect = stack.cardAspect > 0 ? stack.cardAspect : aspectOf(item);
+    if (aspect >= 1) return { w: 1, h: 1 / aspect };
+    return { w: aspect, h: 1 };
+};
+
+const cardClassNames = (stack, extra = []) => {
+    const names = [
+        stack.cardShape === 'square' ? 'is-square' : '',
+        stack.cardShape === 'fixed' ? 'is-fixed' : '',
+        stack.cardShape === 'natural' ? 'is-natural' : '',
+        stack.fit === 'cover' ? 'is-cover' : '',
+        stack.frame === 'thin-white' ? 'is-framed' : '',
+        ...extra,
+    ];
+    return names.filter(Boolean).join(' ');
+};
+
 function isKeyboardFocus(target) {
     try {
         return target.matches(':focus-visible');
@@ -34,15 +60,54 @@ function isKeyboardFocus(target) {
     }
 }
 
-function StackCardFace({ item, index, title }) {
+function decodeImage(node) {
+    if (!node) return Promise.resolve();
+    if (typeof node.decode === 'function') {
+        return node.decode().catch(() => undefined);
+    }
+    return Promise.resolve();
+}
+
+function DecodedImage({ src, alt, loading, fetchPriority }) {
+    const [ready, setReady] = useState(false);
+    const nodeRef = useRef(null);
+
+    const reveal = useCallback((node) => {
+        decodeImage(node).then(() => setReady(true));
+    }, []);
+
+    useEffect(() => {
+        setReady(false);
+        const node = nodeRef.current;
+        if (node && node.complete && node.naturalWidth > 0) {
+            reveal(node);
+        }
+    }, [src, reveal]);
+
+    return (
+        <img
+            ref={nodeRef}
+            className={`stack-card-image${ready ? ' is-ready' : ''}`}
+            src={src}
+            alt={alt}
+            draggable={false}
+            loading={loading}
+            decoding="async"
+            fetchPriority={fetchPriority}
+            onLoad={(event) => reveal(event.currentTarget)}
+            onError={() => setReady(true)}
+        />
+    );
+}
+
+function StackCardFace({ item, index, title, loading = 'lazy', fetchPriority = 'low' }) {
     if (item.type === 'image' && item.src) {
         return (
-            <img
-                className="stack-card-image"
+            <DecodedImage
                 src={item.src}
                 alt={item.title || `${title} ${index + 1}`}
-                draggable={false}
-                loading="lazy"
+                loading={loading}
+                fetchPriority={fetchPriority}
             />
         );
     }
@@ -144,6 +209,21 @@ const GraffitiGallery = () => {
     }, [isOpen, isLeaving, motion.reduced, finishClose]);
 
     useEffect(() => () => window.clearTimeout(leaveTimerRef.current), []);
+
+    useEffect(() => {
+        const indexes = [fannedStack, cyclingStack, openStack].filter(Number.isInteger);
+        indexes.forEach((stackIndex) => {
+            const stack = stacks[stackIndex];
+            if (!stack) return;
+            stack.items.forEach((item) => {
+                if (item.type !== 'image' || !item.src) return;
+                const preload = new Image();
+                preload.decoding = 'async';
+                preload.src = item.src;
+                decodeImage(preload);
+            });
+        });
+    }, [fannedStack, cyclingStack, openStack, stacks]);
 
     useEffect(() => {
         if (!isOpen) return undefined;
@@ -250,6 +330,7 @@ const GraffitiGallery = () => {
                                     'design-stack',
                                     fanned ? 'is-fanned' : '',
                                     isOpen && stackIndex !== openStack ? 'is-background' : '',
+                                    isOpen && !isLeaving && stackIndex === openStack ? 'is-source-open' : '',
                                 ].filter(Boolean).join(' ')}
                                 style={{ '--card-ms': `${fanned ? cardMs : FAN_MS}ms` }}
                                 aria-label={`${stack.title}, ${stack.items.length} items`}
@@ -272,19 +353,28 @@ const GraffitiGallery = () => {
                                     {stack.items.map((item, itemIndex) => {
                                         const depth = depths.get(itemIndex) ?? 0;
                                         const pose = poseFor(depth, fanned);
+                                        const stackActive = fanned
+                                            || cyclingStack === stackIndex
+                                            || (isOpen && stackIndex === openStack);
+                                        const onTop = depth === 0;
+                                        const fit = pileFit(item, stack);
                                         return (
                                             <span
                                                 key={itemIndex}
-                                                className="stack-card"
+                                                className={`stack-card ${cardClassNames(stack)}`}
                                                 style={{
                                                     zIndex: stack.items.length - depth,
-                                                    transform: `translate3d(${pose.x}px, ${pose.y}px, 0) rotate(${pose.r}deg)`,
+                                                    '--fit-w': String(fit.w),
+                                                    '--fit-h': String(fit.h),
+                                                    transform: `translate(-50%, -50%) translate3d(${pose.x}px, ${pose.y}px, 0) rotate(${pose.r}deg)`,
                                                 }}
                                             >
                                                 <StackCardFace
                                                     item={item}
                                                     index={itemIndex}
                                                     title={stack.title}
+                                                    loading={stackActive || onTop ? 'eager' : 'lazy'}
+                                                    fetchPriority={onTop ? 'high' : 'low'}
                                                 />
                                             </span>
                                         );
@@ -326,19 +416,29 @@ const GraffitiGallery = () => {
                             </button>
                         </div>
                         <div className="stack-overlay-grid">
-                            {openDetail.items.map((item, itemIndex) => (
-                                <div
-                                    key={itemIndex}
-                                    className="stack-grid-card"
-                                    style={{ '--delay': `${itemIndex * OPEN_STAGGER_MS}ms` }}
-                                >
-                                    <StackCardFace
-                                        item={item}
-                                        index={itemIndex}
-                                        title={openDetail.title}
-                                    />
-                                </div>
-                            ))}
+                            {openDetail.items.map((item, itemIndex) => {
+                                const aspect = openDetail.cardAspect > 0
+                                    ? openDetail.cardAspect
+                                    : aspectOf(item);
+                                return (
+                                    <div
+                                        key={itemIndex}
+                                        className={`stack-grid-card ${cardClassNames(openDetail)}`}
+                                        style={{
+                                            '--delay': `${itemIndex * OPEN_STAGGER_MS}ms`,
+                                            '--aspect': String(aspect),
+                                        }}
+                                    >
+                                        <StackCardFace
+                                            item={item}
+                                            index={itemIndex}
+                                            title={openDetail.title}
+                                            loading="eager"
+                                            fetchPriority="high"
+                                        />
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>
