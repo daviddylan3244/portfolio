@@ -1,21 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/LandingPage.css';
-
-const SCRAMBLE_CHARS = '!<>-_\\/[]{}=+*^?#$%&@ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+import {
+  randomScrambleChar,
+  SCRAMBLE_START_INTERVAL_MS as CHAR_START_INTERVAL_MS,
+  SCRAMBLE_MIN_MS as MIN_SCRAMBLE_MS,
+  SCRAMBLE_EXTRA_MS as EXTRA_SCRAMBLE_MS,
+} from '../utils/decrypt';
 
 const SITE_VERSION = 'v0.9.4';
-
-// Timing matches the old 60fps frame counts: characters started every
-// 1/0.42 frames (~40ms) and locked after 13 + 0–18 frames (~217–517ms).
-const FRAME_MS = 1000 / 60;
-const CHAR_START_INTERVAL_MS = FRAME_MS / 0.42;
-const MIN_SCRAMBLE_MS = 13 * FRAME_MS;
-const EXTRA_SCRAMBLE_MS = 18 * FRAME_MS;
-
-function randomScrambleChar() {
-  return SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
-}
 
 function useDecryptedText(text, { animate, delay = 0, onComplete }) {
   const [display, setDisplay] = useState(animate ? '' : text);

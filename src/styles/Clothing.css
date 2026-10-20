@@ -7,16 +7,29 @@
 
 .clothing-container .header-container {
     position: relative;
-    z-index: 6;
+    z-index: 200;
     flex: 0 0 auto;
+    align-items: center;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: 0;
+    pointer-events: auto;
+}
+
+.clothing-container .header-nav {
+    top: calc(var(--menu-inset) + env(safe-area-inset-top, 0px));
+}
+
+.clothing-container .header-logo {
+    margin-top: 0;
 }
 
 .floating-streams {
     --stream-item-height: clamp(70px, 10vw, 120px);
-    --stream-row-gap: calc(var(--stream-item-height) * 0.5);
+    --stream-row-gap: 37px;
     --stream-open-ms: 700ms;
     --stream-open-ease: cubic-bezier(0.22, 1, 0.36, 1);
     position: relative;
+    z-index: 0;
     width: 100%;
     max-width: 100%;
     overflow: visible;
@@ -116,7 +129,8 @@
     opacity: 1;
 }
 
-.floating-streams.is-viewer-open .stream-label {
+.floating-streams-row[data-blocked="1"] .stream-label,
+.floating-streams-row[data-blocked="1"] .stream-item.is-hovered .stream-label {
     opacity: 0;
 }
 
@@ -239,6 +253,105 @@
     font-style: italic;
 }
 
+.stream-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 85;
+    display: flex;
+    box-sizing: border-box;
+    font-family: var(--body-copy-font-family);
+    font-size: clamp(14px, 1vw, 15px);
+    font-style: normal;
+    font-weight: normal;
+    letter-spacing: var(--body-copy-letter-spacing);
+    line-height: 1.6;
+    color: var(--body-copy-color);
+    text-align: left;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    pointer-events: none;
+    user-select: text;
+    opacity: 0;
+    transition: opacity 250ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.stream-panel::-webkit-scrollbar {
+    display: none;
+}
+
+/* Centred against the frame beside the photo, top-aligned when it sits below
+   it. Auto margins collapse to zero when the text overflows, so it stays
+   scrollable either way. */
+.stream-panel-inner {
+    width: 100%;
+    margin-top: auto;
+    margin-bottom: auto;
+}
+
+.stream-panel.is-below .stream-panel-inner {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.stream-panel.is-leaving {
+    transition-duration: var(--panel-out-ms, 150ms);
+}
+
+/* Per-character scramble layer, placed over the real text. */
+.stream-panel-scramble {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* Holds one element's font and absorbs any residual baseline offset. */
+.stream-panel-scramble-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.stream-panel-glyph {
+    position: absolute;
+    white-space: pre;
+}
+
+.stream-panel-title {
+    display: block;
+    font-size: clamp(20px, 1.7vw, 24px);
+    font-style: italic;
+    line-height: 1.25;
+}
+
+.stream-panel-year {
+    margin-top: 0.3em;
+}
+
+.stream-panel-details {
+    margin-top: 0.2em;
+    font-size: 0.86em;
+}
+
+.stream-panel-rule {
+    height: 1px;
+    margin: 1em 0;
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.stream-panel-text {
+    margin: 0;
+}
+
 .stream-close {
     position: fixed;
     top: 0;
@@ -275,6 +388,7 @@
 
     .stream-label,
     .stream-caption,
+    .stream-panel,
     .floating-streams-row,
     .stream-overlay,
     .stream-close,

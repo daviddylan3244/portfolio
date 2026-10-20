@@ -4,10 +4,38 @@ import '../styles/Header.css';
 import '../styles/Clothing.css';
 import photoManifest from '../data/photo-manifest.json';
 import photoInfo from '../data/photo-info.json';
+import { randomScrambleChar, SCRAMBLE_START_INTERVAL_MS } from '../utils/decrypt';
 
 const ASPECT_BY_NUMBER = new Map(
     photoManifest.map((entry) => [entry.number, entry.aspect])
 );
+
+// ---------------------------------------------------------------------------
+// Gallery-wall experiment. true = enlarged photo sits to the right of a text
+// panel. false = the previous version, a small title label under the photo.
+// ---------------------------------------------------------------------------
+const GALLERY_PANEL_ENABLED = true;
+const GALLERY_PANEL_MIN_PX = 280;
+const GALLERY_PANEL_MAX_PX = 360;
+const GALLERY_PANEL_GAP_PX = 40;
+// Narrower than this and there is no room for a panel beside the photo.
+const GALLERY_SIDE_MIN_PX = 820;
+// Below the photo the panel gets a block of its own and scrolls inside it.
+const GALLERY_BELOW_GAP_PX = 12;
+const GALLERY_BELOW_PX = 140;
+// Opening is in two steps: grow to the centre, then slide across to the panel
+// layout. The text sweeps in left to right once the slide lands.
+const GALLERY_SLIDE_MS = 350;
+const GALLERY_SWEEP_MS = 620;
+const GALLERY_CHAR_MIN_MS = 160;
+const GALLERY_CHAR_EXTRA_MS = 140;
+const GALLERY_TEXT_OUT_MS = 150;
+const GALLERY_DETAILS_PLACEHOLDER = 'Lorem ipsum · Dolor sit';
+const GALLERY_TEXT_PLACEHOLDER =
+    'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+    + 'tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim '
+    + 'veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea '
+    + 'commodo. Duis aute irure dolor in reprehenderit in voluptate velit esse.';
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -22,7 +50,6 @@ const ITEM_HEIGHT_VW = 10;
 const ITEM_HEIGHT_MAX_PX = 120;
 
 const ITEM_GAP_PX = 40;
-const VERTICAL_GAP_RATIO = 0.5; // gap between rows, as a fraction of item height
 
 // First intro row starts as soon as its images are ready.
 const INTRO_FIRST_DELAY_SECONDS = 0.0;
@@ -37,7 +64,8 @@ const INTRO_STORAGE_KEY = 'clothing-intro-played';
 // Used only if sessionStorage is unavailable.
 let introPlayedThisVisit = false;
 
-const MAX_FRAME_SECONDS = 0.1;
+// One slow frame (close cleanup, decode, etc.) must not leap the rows.
+const MAX_FRAME_SECONDS = 1 / 32;
 
 // Future: each item's speed = baseSpeed * (1 ± this). 0.25 => about ±25%.
 const SPEED_VARIATION = 0;
@@ -72,7 +100,7 @@ const LARGE_CACHE_LIMIT = 8;
 const OPEN_TRANSITION_MS = 450;
 const OPEN_EASE_POINTS = [0.22, 1, 0.36, 1];
 const OPEN_EASING = `cubic-bezier(${OPEN_EASE_POINTS.join(', ')})`;
-const CLOSE_EASE_POINTS = [0.65, 0, 0.35, 1];
+const CLOSE_EASE_POINTS = [0.22, 1, 0.36, 1];
 const CLOSE_EASING = `cubic-bezier(${CLOSE_EASE_POINTS.join(', ')})`;
 const REDUCED_MOTION_VIEWER_MS = 180;
 const VIEWER_GAP_PX = 32;
@@ -109,6 +137,9 @@ const STREAM_LIBRARY = Array.from({ length: PHOTO_COUNT }, (_, index) => index +
 
 // Wall label text, keyed by photo number. Returns null when there is no title.
 const LABEL_EDGE_PAD_PX = 8;
+const LABEL_GAP_PX = 6;
+const LABEL_BREATH_PX = 4;
+const HEADER_TO_ROW_GAP_PX = 18;
 
 function photoLabelFor(spec) {
     const info = spec && spec.number != null ? photoInfo[spec.number] : null;
@@ -214,6 +245,16 @@ function viewerBorderPx() {
     );
 }
 
+function hoverOutlineEstimatePx() {
+    return Math.max(6, Math.round(viewerBorderPx() * 0.3));
+}
+
+function labelClearancePx(height) {
+    const fontPx = Math.max(11, Math.min(13, height * 0.12));
+    const labelH = Math.ceil(fontPx * 1.2);
+    return labelH + LABEL_GAP_PX + hoverOutlineEstimatePx() + LABEL_BREATH_PX;
+}
+
 function easeBezier(points, amount) {
     const [x1, y1, x2, y2] = points;
     const x = Math.max(0, Math.min(1, amount));
@@ -256,11 +297,29 @@ function frameOpacityFor(phase, amount) {
     return 0;
 }
 
+function easeInOut(amount) {
+    const x = Math.max(0, Math.min(1, amount));
+    return x < 0.5 ? 2 * x * x : 1 - ((-2 * x + 2) ** 2) / 2;
+}
+
 function lerpPose(from, to, amount) {
     return {
         x: from.x + (to.x - from.x) * amount,
         y: from.y + (to.y - from.y) * amount,
         scale: from.scale + (to.scale - from.scale) * amount,
+    };
+}
+
+// Invert lerpPose so a mid-flight retarget (tile recycled → exit right)
+// keeps the current pose at this amount and still lands on `to` at 1.
+function startPoseFor(current, to, amount) {
+    if (amount <= 0) return { ...current };
+    if (amount >= 1) return { ...to };
+    const inv = 1 - amount;
+    return {
+        x: (current.x - to.x * amount) / inv,
+        y: (current.y - to.y * amount) / inv,
+        scale: (current.scale - to.scale * amount) / inv,
     };
 }
 
@@ -507,6 +566,8 @@ function Clothing() {
         const introTimers = [];
         const introEntering = new Set();
         const startedRows = new Set();
+        const rowPending = new Set();
+        const rowEpoch = [];
         const rowAssignments = new Map();
         const libraryByKey = new Map(
             STREAM_LIBRARY.map((item) => [item.src || item.id, item])
@@ -562,12 +623,30 @@ function Clothing() {
         let lastTime = 0;
         let viewportWidth = 0;
         let itemHeight = 0;
+        let rowGapPx = 0;
+        let pageRowCount = 0;
+        let restFirstTop = 0;
         let baseSpeed = 0;
         let cancelled = false;
 
         const overlay = document.createElement('div');
         overlay.className = 'stream-overlay';
         overlay.hidden = true;
+
+        const headerEl = () =>
+            section.parentElement
+                ? section.parentElement.querySelector('.header-container')
+                : null;
+
+        const clipOverlayToHeader = () => {
+            const header = headerEl();
+            const top = header ? Math.ceil(header.getBoundingClientRect().bottom) : 0;
+            overlay.style.top = `${Math.max(0, top)}px`;
+        };
+
+        const resetOverlayClip = () => {
+            overlay.style.top = '';
+        };
 
         const makeFlyer = () => {
             const root = document.createElement('div');
@@ -623,7 +702,30 @@ function Clothing() {
         captionYear.className = 'stream-caption-year';
         caption.append(captionTitle, captionYear);
 
+        // Gallery-wall text panel. Unlike the caption it takes pointer events,
+        // so text in it can be selected.
+        const panel = document.createElement('div');
+        panel.className = 'stream-panel';
+        panel.hidden = true;
+        panel.style.opacity = '0';
+        panel.style.setProperty('--panel-out-ms', `${GALLERY_TEXT_OUT_MS}ms`);
+        const panelInner = document.createElement('div');
+        panelInner.className = 'stream-panel-inner';
+        const panelTitle = document.createElement('i');
+        panelTitle.className = 'stream-panel-title';
+        const panelYear = document.createElement('div');
+        panelYear.className = 'stream-panel-year';
+        const panelDetails = document.createElement('div');
+        panelDetails.className = 'stream-panel-details';
+        const panelRule = document.createElement('div');
+        panelRule.className = 'stream-panel-rule';
+        const panelText = document.createElement('p');
+        panelText.className = 'stream-panel-text';
+        panelInner.append(panelTitle, panelYear, panelDetails, panelRule, panelText);
+        panel.append(panelInner);
+
         document.body.append(overlay, closeBtn, caption);
+        if (GALLERY_PANEL_ENABLED) document.body.append(panel);
 
         const menuEl = section.parentElement
             ? section.parentElement.querySelector('.header-nav')
@@ -641,34 +743,91 @@ function Clothing() {
 
         const opacityForSlot = (slot) => {
             if (!viewer) return null;
-            if (slot === viewer.slot) return viewer.thumbOpacity;
+            if (slot === viewer.slot && !viewer.tileGone) return viewer.thumbOpacity;
             const departing = viewer.departures.find((item) => item.slot === slot);
-            return departing ? departing.thumbOpacity : null;
+            return departing && !departing.tileGone ? departing.thumbOpacity : null;
         };
 
         let scrollLockY = null;
+        let scrollLockPad = '';
+        let suppressScroll = false;
+        let postCloseFrame = 0;
+        let quietRows = new Set();
+        let quietRowsUntil = 0;
+        let deferredFlyers = [];
+        const rowLayoutQuiet = (rowIndex) => {
+            if (rowIndex == null || rowIndex < 0) return false;
+            if (viewer) {
+                if (viewer.homeRow === rowIndex) return true;
+                if (viewer.departures?.some((dep) => dep.homeRow === rowIndex)) return true;
+            }
+            return quietRows.has(rowIndex) && performance.now() < quietRowsUntil;
+        };
         const pageStartedAt = performance.now();
 
         let streamOriginX = 0;
         let streamOriginY = 0;
+        let viewOriginX = 0;
+        let viewOriginY = 0;
         const cacheStreamOrigin = () => {
             const rect = section.getBoundingClientRect();
-            streamOriginY = rect.top + pageScroll();
+            viewOriginX = rect.left;
+            viewOriginY = rect.top;
             streamOriginX = rect.left + (window.scrollX || window.pageXOffset || 0);
+            streamOriginY = rect.top + pageScroll();
         };
+        const applyHeaderRowGap = () => {
+            const header = headerEl();
+            if (!header) {
+                section.style.marginTop = '';
+                return;
+            }
+            const headerBox = header.getBoundingClientRect();
+            let chromeBottom = headerBox.top;
+            const logo = header.querySelector('.header-logo');
+            if (logo) {
+                chromeBottom = Math.max(chromeBottom, logo.getBoundingClientRect().bottom);
+            }
+            if (menuEl) {
+                chromeBottom = Math.max(chromeBottom, menuEl.getBoundingClientRect().bottom);
+            }
+            const margin = Math.round(chromeBottom + HEADER_TO_ROW_GAP_PX - headerBox.bottom);
+            section.style.marginTop = margin ? `${margin}px` : '';
+        };
+
+        const fitRowsToViewport = (firstTop) => {
+            const minGap = labelClearancePx(itemHeight);
+            const available = viewHeight() - firstTop - minGap;
+            if (!(itemHeight > 0) || available < itemHeight) {
+                return { gap: minGap, count: 1 };
+            }
+            const n = Math.max(
+                1,
+                Math.floor((available + minGap) / (itemHeight + minGap))
+            );
+            if (n <= 1) return { gap: minGap, count: 1 };
+            let gap = Math.round((available - n * itemHeight) / (n - 1));
+            gap = Math.max(minGap, gap);
+            const used = n * itemHeight + (n - 1) * gap;
+            if (used > available && gap > minGap) gap -= 1;
+            return { gap, count: n };
+        };
+
         const applyLayoutMetrics = () => {
             viewportWidth = section.clientWidth || window.innerWidth;
             itemHeight = clampItemHeight(window.innerWidth);
+            applyHeaderRowGap();
+            cacheStreamOrigin();
+            restFirstTop = Math.max(0, Math.round(streamOriginY));
+            const fitted = fitRowsToViewport(restFirstTop);
+            rowGapPx = fitted.gap;
+            pageRowCount = fitted.count;
             baseSpeed = itemHeight * ROW_SPEED_HEIGHTS_PER_SECOND;
             section.style.setProperty('--stream-item-height', `${itemHeight}px`);
-            section.style.setProperty(
-                '--stream-row-gap',
-                `${itemHeight * VERTICAL_GAP_RATIO}px`
-            );
-            cacheStreamOrigin();
+            section.style.setProperty('--stream-row-gap', `${rowGapPx}px`);
         };
 
-        const stridePx = () => itemHeight * (1 + VERTICAL_GAP_RATIO);
+        const stridePx = () => itemHeight + rowGapPx;
         const pageScroll = () =>
             scrollLockY == null ? window.scrollY || window.pageYOffset || 0 : scrollLockY;
         const viewHeight = () => {
@@ -678,18 +837,23 @@ function Clothing() {
         };
 
         const visibleBounds = () => {
-            const origin = section.offsetTop;
-            const viewTop = pageScroll();
-            const viewBottom = viewTop + viewHeight();
+            // Viewport coordinates of row 0 — not document Y + scroll. Mixing
+            // those after body scroll-lock was mounting the top-of-page rows
+            // while the user was looking further down.
+            cacheStreamOrigin();
+            const origin = viewOriginY;
+            const viewTop = 0;
+            const viewBottom = viewHeight();
             const stride = stridePx();
             if (!(stride > 0)) return { first: 0, last: 0 };
+            const extent = itemHeight + labelClearancePx(itemHeight);
             let first = null;
             let last = null;
             const start = Math.max(0, Math.floor((viewTop - origin) / stride) - 1);
             for (let index = start; index < start + 60; index += 1) {
                 const rowTop = origin + index * stride;
                 if (rowTop >= viewBottom) break;
-                if (rowTop + itemHeight > viewTop) {
+                if (rowTop + extent > viewTop) {
                     if (first == null) first = index;
                     last = index;
                 }
@@ -712,28 +876,44 @@ function Clothing() {
 
         const lockScroll = () => {
             if (scrollLockY != null) return;
+            // Measure before hiding overflow: once the scrollbar is gone the
+            // layout viewport gets wider and a centered header would jump.
+            const gutter = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
             scrollLockY = window.scrollY || window.pageYOffset || 0;
+            scrollLockPad = document.body.style.paddingRight;
             document.body.style.position = 'fixed';
             document.body.style.top = `-${scrollLockY}px`;
             document.body.style.left = '0';
             document.body.style.right = '0';
             document.body.style.width = '100%';
+            document.body.style.paddingRight = `${gutter}px`;
             document.documentElement.style.overflow = 'hidden';
             document.addEventListener('touchmove', blockTouchScroll, { passive: false });
+            cacheStreamOrigin();
         };
 
         const unlockScroll = () => {
             document.removeEventListener('touchmove', blockTouchScroll);
             if (scrollLockY == null) return;
             const y = scrollLockY;
-            scrollLockY = null;
+            suppressScroll = true;
             document.body.style.position = '';
             document.body.style.top = '';
             document.body.style.left = '';
             document.body.style.right = '';
             document.body.style.width = '';
+            document.body.style.paddingRight = scrollLockPad;
+            scrollLockPad = '';
             document.documentElement.style.overflow = '';
+            document.documentElement.scrollTop = y;
+            document.body.scrollTop = y;
             window.scrollTo(0, y);
+            scrollLockY = null;
+            cacheStreamOrigin();
+            lastTime = performance.now();
+            requestAnimationFrame(() => {
+                suppressScroll = false;
+            });
         };
 
         const avgAspect = () => {
@@ -950,7 +1130,12 @@ function Clothing() {
             if (!loaded.img || imgOwnedByOtherSlot(loaded.img, slot)) return;
             const prevWidth = slot.width;
             applyVisuals(slot, loaded);
-            if (Math.abs(slot.width - prevWidth) > 0.5) packRow(slot.row);
+            if (
+                Math.abs(slot.width - prevWidth) > 0.5
+                && !rowLayoutQuiet(slot.row)
+            ) {
+                packRow(slot.row);
+            }
             paint(slot);
         };
 
@@ -1093,14 +1278,17 @@ function Clothing() {
             for (let i = 0; i < pool.length; i += 1) {
                 const slot = pool[i];
                 if (slot.row !== rowIndex || slot === except) continue;
+                if (slot.el && rows[slot.row] && slot.el.parentNode !== rows[slot.row]) continue;
                 if (!leftmost || slot.x < leftmost.x) leftmost = slot;
             }
             return leftmost;
         };
 
-        const slotIsHeld = (slot) =>
-            !!viewer &&
-            (viewer.slot === slot || viewer.departures.some((departure) => departure.slot === slot));
+        const slotIsHeld = (slot) => {
+            if (!viewer) return false;
+            if (viewer.slot === slot && !viewer.tileGone) return true;
+            return viewer.departures.some((departure) => departure.slot === slot && !departure.tileGone);
+        };
 
         const displayedSpec = (slot) => {
             const image = slot.el && slot.el.querySelector('img');
@@ -1129,9 +1317,11 @@ function Clothing() {
 
         const recycle = (slot) => {
             if (slot.frozen) return;
-            if (slotIsHeld(slot)) {
-                wrapSlot(slot, slot.spec);
-                return;
+            const wasOwned = !!(viewer && slotIsHeld(slot));
+            if (viewer) {
+                if (viewer.slot === slot) viewer.tileGone = true;
+                const departing = viewer.departures.find((item) => item.slot === slot);
+                if (departing) departing.tileGone = true;
             }
             const spec = dealUniqueSpec(slot);
             if (spec) {
@@ -1143,7 +1333,12 @@ function Clothing() {
             } else {
                 wrapSlot(slot, slot.spec);
             }
-            pumpSmalls();
+            if (wasOwned) {
+                slot.paintedOpacity = 1;
+                slot.el.style.opacity = '1';
+                paint(slot);
+            }
+            if (!(viewer && viewer.phase === 'closing')) pumpSmalls();
         };
 
         const ensureReadyBeforeVisible = (slot) => {
@@ -1156,7 +1351,12 @@ function Clothing() {
             releaseReserved(slot.spec);
             applyVisuals(slot, ready);
             releaseReserved(ready);
-            if (Math.abs(slot.width - prevWidth) > 0.5) packRow(slot.row);
+            if (
+                Math.abs(slot.width - prevWidth) > 0.5
+                && !rowLayoutQuiet(slot.row)
+            ) {
+                packRow(slot.row);
+            }
             paint(slot);
         };
 
@@ -1347,13 +1547,86 @@ function Clothing() {
             pumpSmalls();
         };
 
-        const applyRows = (amount) => {
-            const frameTop = viewer ? viewer.frameTop : -1;
-            const frameBottom = viewer ? viewer.frameBottom : -1;
+        const rectsOverlap = (a, b) =>
+            a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+        const closeButtonBox = (layout) => {
+            const border = layout.border || 0;
+            const right = layout.endLeft + layout.inner.width + border;
+            const top = layout.endTop - border;
+            let closeX = right + CLOSE_BUTTON_GAP_PX;
+            let closeY = top;
+            if (closeX + CLOSE_BUTTON_PX > window.innerWidth - 8) {
+                closeX = Math.max(8, right - CLOSE_BUTTON_PX);
+                closeY = Math.max(8, top - CLOSE_BUTTON_PX - 4);
+            }
+            return {
+                left: closeX,
+                top: closeY,
+                right: closeX + CLOSE_BUTTON_PX,
+                bottom: closeY + CLOSE_BUTTON_PX,
+            };
+        };
+
+        const obstructionBoxes = (layout) => {
+            const border = layout.border || 0;
+            const boxes = [
+                {
+                    left: layout.endLeft - border,
+                    top: layout.endTop - border,
+                    right: layout.endLeft + layout.inner.width + border,
+                    bottom: layout.endTop + layout.inner.height + border,
+                },
+                closeButtonBox(layout),
+            ];
+            if (layout.panel) {
+                boxes.push({
+                    left: layout.panel.left,
+                    top: layout.panel.top,
+                    right: layout.panel.left + layout.panel.width,
+                    bottom: layout.panel.top + layout.panel.height,
+                });
+            }
+            return boxes;
+        };
+
+        const rowFadeBox = (index) => {
+            const top = viewOriginY + index * stridePx();
+            const outline = hoverOutlineEstimatePx();
+            const clearance = labelClearancePx(itemHeight);
+            const width = viewportWidth || window.innerWidth;
+            return {
+                left: viewOriginX,
+                top: top - outline,
+                right: viewOriginX + width,
+                bottom: top + itemHeight + clearance,
+            };
+        };
+
+        const hiddenRowsFor = (layout) => {
+            const hidden = new Set();
+            if (!layout) return hidden;
+            cacheStreamOrigin();
+            const boxes = obstructionBoxes(layout);
+            const viewH = viewHeight();
             rows.forEach((row, index) => {
                 if (!row) return;
-                const between = index > frameTop && index < frameBottom;
-                const targetOpacity = viewer && between ? 0 : 1;
+                const box = rowFadeBox(index);
+                if (box.bottom <= 0 || box.top >= viewH) return;
+                if (boxes.some((other) => rectsOverlap(box, other))) hidden.add(index);
+            });
+            return hidden;
+        };
+
+        const rowStaysVisible = (rowIndex) =>
+            !!viewer && !(viewer.hiddenRows && viewer.hiddenRows.has(rowIndex));
+
+        const applyRows = (amount) => {
+            const hidden = viewer && viewer.hiddenRows ? viewer.hiddenRows : null;
+            rows.forEach((row, index) => {
+                if (!row) return;
+                const stay = !hidden || !hidden.has(index);
+                const targetOpacity = viewer && !stay ? 0 : 1;
                 const opacity = 1 + (targetOpacity - 1) * amount;
                 const opacityStr = String(opacity);
                 if (row.dataset.opacity !== opacityStr) {
@@ -1364,41 +1637,17 @@ function Clothing() {
                 const blockedFlag = blocked ? '1' : '0';
                 if (row.dataset.blocked !== blockedFlag) {
                     row.dataset.blocked = blockedFlag;
-                    row.querySelectorAll('.stream-item').forEach((item) => {
-                        item.style.pointerEvents = blocked ? 'none' : '';
-                    });
                 }
-                if (row.style.zIndex !== '') row.style.zIndex = '';
+                const z = viewer && stay ? '2' : '';
+                if (row.style.zIndex !== z) row.style.zIndex = z;
                 const pointerEvents = blocked ? 'none' : '';
                 if (row.style.pointerEvents !== pointerEvents) {
                     row.style.pointerEvents = pointerEvents;
                 }
+                if (row.style.transform) row.style.transform = '';
                 rowPose[index] = { ty: 0, scale: 1 };
             });
             section.classList.toggle('is-viewer-open', amount > 0.02);
-            if (menuEl) {
-                const menuOpacity = String(1 - amount);
-                if (menuEl.style.opacity !== menuOpacity) menuEl.style.opacity = menuOpacity;
-                const menuEvents = amount > 0.85 ? 'none' : '';
-                if (menuEl.style.pointerEvents !== menuEvents) {
-                    menuEl.style.pointerEvents = menuEvents;
-                }
-            }
-        };
-
-        const measureRows = () => {
-            const bases = [];
-            rows.forEach((row, index) => {
-                if (!row) return;
-                const rect = row.getBoundingClientRect();
-                bases[index] = {
-                    top: rect.top,
-                    left: rect.left,
-                    width: rect.width,
-                    height: rect.height,
-                };
-            });
-            return bases;
         };
 
         const viewerAspect = (spec, slot) => {
@@ -1410,49 +1659,74 @@ function Clothing() {
             return 1;
         };
 
-        const layoutViewer = (spec, bases, slot) => {
-            const aspect = viewerAspect(spec, slot);
-            const topIndex = viewer ? viewer.frameTop : visibleBounds().first;
-            const bottomIndex = viewer ? viewer.frameBottom : visibleBounds().last;
-            const topRow = bases[topIndex] || bases.find(Boolean);
-            const bottomRow = bases[bottomIndex] || [...bases].reverse().find(Boolean);
-            if (!topRow || !bottomRow) {
-                const border = viewerBorderPx();
-                const maxTotalH = Math.max(
-                    80,
-                    viewHeight() - VIEWER_GAP_PX * 2 - CAPTION_RESERVE_PX
-                );
-                const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
-                const inner = fitInBox(
-                    aspect,
-                    Math.max(40, maxTotalW - border * 2),
-                    Math.max(40, maxTotalH - border * 2)
-                );
-                const totalW = inner.width + border * 2;
-                const totalH = inner.height + border * 2;
+        // The panel sits beside the photo on wide screens and below it on
+        // narrow ones; either way its room comes out of the viewer's box.
+        const panelBeside = () =>
+            GALLERY_PANEL_ENABLED && window.innerWidth >= GALLERY_SIDE_MIN_PX;
+
+        const panelWidthPx = () =>
+            Math.max(
+                GALLERY_PANEL_MIN_PX,
+                Math.min(GALLERY_PANEL_MAX_PX, Math.round(window.innerWidth * 0.24))
+            );
+
+        const bottomReservePx = () => {
+            if (!GALLERY_PANEL_ENABLED) return CAPTION_RESERVE_PX;
+            return panelBeside() ? 0 : GALLERY_BELOW_GAP_PX + GALLERY_BELOW_PX;
+        };
+
+        const panelGeometry = (box) => {
+            if (!GALLERY_PANEL_ENABLED) return null;
+            const { beside, groupLeft, border, inner, endLeft, endTop, bandBottom } = box;
+            if (beside) {
+                // Spans the photo's height; the text inside sits at the bottom.
                 return {
-                    border,
-                    inner,
-                    totalW,
-                    totalH,
-                    endLeft: (window.innerWidth - inner.width) / 2,
-                    endTop: (viewHeight() - inner.height - CAPTION_RESERVE_PX) / 2,
+                    beside: true,
+                    left: groupLeft,
+                    top: endTop - border,
+                    width: panelWidthPx(),
+                    height: inner.height + border * 2,
                 };
             }
+            const left = Math.max(8, endLeft - border);
+            const top = endTop + inner.height + border + GALLERY_BELOW_GAP_PX;
+            return {
+                beside: false,
+                left,
+                top,
+                width: Math.min(
+                    window.innerWidth - left - 8,
+                    Math.max(240, inner.width + border * 2)
+                ),
+                height: Math.max(80, bandBottom - top),
+            };
+        };
+
+        const layoutViewer = (spec, slot) => {
+            const aspect = viewerAspect(spec, slot);
+            const reserve = bottomReservePx();
+            const beside = panelBeside();
+            const sideCost = beside ? panelWidthPx() + GALLERY_PANEL_GAP_PX : 0;
             const border = viewerBorderPx();
-            const gapTop = topRow.top + topRow.height + VIEWER_GAP_PX;
-            const gapBottom = bottomRow.top - VIEWER_GAP_PX;
-            const visibleTop = Math.max(gapTop, VIEWER_GAP_PX);
-            const visibleBottom = Math.min(gapBottom, viewHeight() - VIEWER_GAP_PX);
+            const firstTop = restFirstTop;
+            const count = Math.max(1, pageRowCount);
+            const lastTop = firstTop + (count - 1) * stridePx();
+            const topGap = Math.max(VIEWER_GAP_PX, labelClearancePx(itemHeight));
+            const bottomGap = VIEWER_GAP_PX;
+            const gapTop = firstTop + itemHeight + topGap;
+            const gapBottom = lastTop - bottomGap;
+            const visibleTop = Math.max(gapTop, topGap);
+            const visibleBottom = Math.min(gapBottom, viewHeight() - bottomGap);
             const betweenRows = visibleBottom - visibleTop;
             const room = viewHeight() - VIEWER_GAP_PX * 2;
-            // The caption lives in the same band, so it comes off the height
-            // the photo and frame are allowed to use.
             const maxTotalH = Math.max(
                 80,
-                Math.min(room, betweenRows > 40 ? betweenRows : room) - CAPTION_RESERVE_PX
+                Math.min(room, betweenRows > 40 ? betweenRows : room) - reserve
             );
-            const maxTotalW = Math.max(80, window.innerWidth - VIEWER_GAP_PX * 2);
+            const maxTotalW = Math.max(
+                80,
+                window.innerWidth - VIEWER_GAP_PX * 2 - sideCost
+            );
             const inner = fitInBox(
                 aspect,
                 Math.max(40, maxTotalW - border * 2),
@@ -1460,23 +1734,134 @@ function Clothing() {
             );
             const totalW = inner.width + border * 2;
             const totalH = inner.height + border * 2;
-            const endLeft = (window.innerWidth - inner.width) / 2;
-            let endTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2 + border;
-            endTop = Math.max(
-                VIEWER_GAP_PX + border,
-                Math.min(
-                    endTop,
-                    viewHeight() - inner.height - VIEWER_GAP_PX - border - CAPTION_RESERVE_PX
-                )
+            const groupLeft = Math.max(
+                VIEWER_GAP_PX,
+                (window.innerWidth - (totalW + sideCost)) / 2
             );
+            const centerLeft = (window.innerWidth - inner.width) / 2;
+            const endLeft = beside ? groupLeft + sideCost + border : centerLeft;
+            let standardEndTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2 + border;
+            const minEndTop = Math.ceil(
+                Math.max(VIEWER_GAP_PX, headerEl()?.getBoundingClientRect().bottom || 0)
+                + border
+            );
+            const maxEndTop = Math.floor(
+                viewHeight() - inner.height - VIEWER_GAP_PX - border - reserve
+            );
+            standardEndTop = Math.max(minEndTop, Math.min(standardEndTop, maxEndTop));
 
-            return {
+            const buildLayout = (endTop) => ({
                 border,
                 inner,
                 totalW,
                 totalH,
                 endLeft,
                 endTop,
+                centerLeft,
+                standardEndTop,
+                panel: panelGeometry({
+                    beside,
+                    groupLeft,
+                    border,
+                    inner,
+                    endLeft,
+                    endTop,
+                    bandBottom: viewHeight() - VIEWER_GAP_PX,
+                }),
+            });
+
+            cacheStreamOrigin();
+            const viewH = viewHeight();
+            const headerBottom = Math.ceil(headerEl()?.getBoundingClientRect().bottom || 0);
+            const minBoxTop = Math.max(VIEWER_GAP_PX, headerBottom);
+            const stride = stridePx();
+            const firstIndex = Math.max(0, Math.floor((0 - viewOriginY) / Math.max(1, stride)) - 2);
+            const fadeIndexes = [];
+            for (let index = firstIndex; index < firstIndex + 24; index += 1) {
+                fadeIndexes.push(index);
+            }
+
+            const layoutFits = (layout) =>
+                obstructionBoxes(layout).every(
+                    (box) =>
+                        box.top >= minBoxTop - 0.5
+                        && box.bottom <= viewH + 0.5
+                        && box.left >= -0.5
+                        && box.right <= window.innerWidth + 0.5
+                );
+
+            const countFades = (layout) => {
+                const boxes = obstructionBoxes(layout);
+                let n = 0;
+                for (let i = 0; i < fadeIndexes.length; i += 1) {
+                    const box = rowFadeBox(fadeIndexes[i]);
+                    if (box.bottom <= 0 || box.top >= viewH) continue;
+                    if (boxes.some((other) => rectsOverlap(box, other))) n += 1;
+                }
+                return n;
+            };
+
+            const gapAboveRowBelow = (layout) => {
+                const frameBottom = layout.endTop + layout.inner.height + layout.border;
+                const boxes = obstructionBoxes(layout);
+                let nearest = Infinity;
+                for (let i = 0; i < fadeIndexes.length; i += 1) {
+                    const index = fadeIndexes[i];
+                    const top = viewOriginY + index * stride;
+                    if (top + itemHeight <= 0 || top >= viewH) continue;
+                    const box = rowFadeBox(index);
+                    if (boxes.some((other) => rectsOverlap(box, other))) continue;
+                    if (top >= frameBottom - 0.5 && top < nearest) nearest = top;
+                }
+                return nearest - frameBottom;
+            };
+
+            // Same size as the top-of-page photo; only the vertical position
+            // may move, so it sits in the row gaps and fades as few rows as
+            // possible. Prefer a normal gap above the row below, then the
+            // standard (top-of-page) position.
+            let bestY = standardEndTop;
+            let bestFades = Infinity;
+            let bestComfort = -1;
+            let bestDist = Infinity;
+            const consider = (y) => {
+                if (y < minEndTop || y > maxEndTop) return;
+                const layout = buildLayout(y);
+                if (!layoutFits(layout)) return;
+                const fades = countFades(layout);
+                const comfort = gapAboveRowBelow(layout) >= VIEWER_GAP_PX - 0.5 ? 1 : 0;
+                const dist = Math.abs(y - standardEndTop);
+                if (
+                    fades < bestFades
+                    || (fades === bestFades && comfort > bestComfort)
+                    || (fades === bestFades && comfort === bestComfort && dist < bestDist)
+                ) {
+                    bestY = y;
+                    bestFades = fades;
+                    bestComfort = comfort;
+                    bestDist = dist;
+                }
+            };
+            consider(standardEndTop);
+            for (let y = minEndTop; y <= maxEndTop; y += 1) consider(y);
+
+            return buildLayout(bestY);
+        };
+
+        // Step A grows the photo to the centre; the slide across to the panel
+        // layout is a second step, so the two never blend into one move.
+        const openTargetFor = (layout) => {
+            const slide =
+                GALLERY_PANEL_ENABLED
+                && !reducedMotion
+                && Math.abs(layout.endLeft - layout.centerLeft) > 0.5;
+            return {
+                slide,
+                pose: {
+                    x: slide ? layout.centerLeft : layout.endLeft,
+                    y: layout.endTop,
+                    scale: 1,
+                },
             };
         };
 
@@ -1493,13 +1878,51 @@ function Clothing() {
             const scale = slot.scale || 1;
             const width = slot.width * scale;
             const height = itemHeight * scale;
-            const originX = streamOriginX - (window.scrollX || window.pageXOffset || 0);
-            const originY = streamOriginY - pageScroll();
             return {
-                left: originX + slot.x + (slot.width - width) / 2,
-                top: originY + slot.row * stridePx() + (itemHeight - height) / 2,
+                left: viewOriginX + slot.x + (slot.width - width) / 2,
+                top: viewOriginY + slot.row * stridePx() + (itemHeight - height) / 2,
                 width,
                 height,
+            };
+        };
+
+        const thumbOnScreen = (thumb) =>
+            !!thumb && thumb.left < window.innerWidth && thumb.left + thumb.width > 0;
+
+        const homeTileStillThere = (slot, key, tileGone) => {
+            if (tileGone || !slot || !key) return false;
+            if (!slot.el || !rows[slot.row] || slot.el.parentNode !== rows[slot.row]) return false;
+            if (photoKey(slot.spec) !== key) return false;
+            return thumbOnScreen(liveThumb(slot));
+        };
+
+        const exitRightPose = (layout, thumb, rowIndex) => {
+            const width = thumb?.width || itemHeight;
+            const height = thumb?.height || itemHeight;
+            const scale = width / Math.max(1, layout.inner.width);
+            const top = viewOriginY + rowIndex * stridePx()
+                + (itemHeight - height) / 2;
+            return {
+                x: window.innerWidth,
+                y: top,
+                scale,
+            };
+        };
+
+        const closeTargetFor = (slot, layout, tileGone, homeWidth, homeKey, homeRow) => {
+            if (homeTileStillThere(slot, homeKey, tileGone)) {
+                return { exitRight: false, pose: poseFromThumb(liveThumb(slot), layout) };
+            }
+            return {
+                exitRight: true,
+                pose: exitRightPose(
+                    layout,
+                    {
+                        width: homeWidth || itemHeight,
+                        height: itemHeight,
+                    },
+                    homeRow != null ? homeRow : (slot ? slot.row : 0)
+                ),
             };
         };
 
@@ -1614,6 +2037,7 @@ function Clothing() {
             viewer.pose = pose;
             placeNode(activeFlyer, pose);
             setFlyerFrame(activeFlyer, viewer.frameOpacity);
+            if (viewer.phase === 'closing' || viewer.closeDone) return;
             const extra = (layout.border || 0) * pose.scale * (viewer.frameOpacity || 0);
             const right = pose.x + layout.inner.width * pose.scale + extra;
             const top = pose.y - extra;
@@ -1629,6 +2053,10 @@ function Clothing() {
         // Text is rewritten on every open and every switch, so the caption can
         // never be left showing the photo before it.
         const setCaptionText = (spec) => {
+            if (GALLERY_PANEL_ENABLED) {
+                caption.hidden = true;
+                return;
+            }
             const info = photoLabelFor(spec);
             captionTitle.textContent = info ? info.title : '';
             captionYear.textContent = info && info.year ? `, ${info.year}` : '';
@@ -1651,30 +2079,297 @@ function Clothing() {
         };
 
         const syncCaption = () => {
+            if (GALLERY_PANEL_ENABLED) return;
             const show = !!viewer && viewer.phase === 'open' && !viewer.closeDone;
             const value = show ? '1' : '0';
             if (caption.style.opacity !== value) caption.style.opacity = value;
         };
 
+        // Panel text reveal. The real text stays in flow so wrapping is locked;
+        // the scramble runs in an absolutely placed layer on top of it, the way
+        // the landing page overlays its decrypt value on a hidden sizer.
+        let panelRaf = 0;
+        let panelGlyphs = [];
+        let panelOverlay = null;
+        let panelShown = false;
+
+        const panelTextEls = () => [panelTitle, panelYear, panelDetails, panelText];
+
+        const stopPanelRevealLoop = () => {
+            if (!panelRaf) return;
+            cancelAnimationFrame(panelRaf);
+            panelRaf = 0;
+        };
+
+        // Puts the panel back to plain, selectable text.
+        const clearPanelReveal = () => {
+            stopPanelRevealLoop();
+            panelGlyphs = [];
+            if (panelOverlay) {
+                panelOverlay.remove();
+                panelOverlay = null;
+            }
+            panelTextEls().forEach((el) => {
+                el.style.visibility = '';
+            });
+            panelRule.style.opacity = '';
+            panelRule.style.clipPath = '';
+            panelInner.removeAttribute('aria-hidden');
+            panel.removeAttribute('aria-label');
+        };
+
+        // Where a character actually paints, measured the same way for the real
+        // text and for a glyph: the text box, not the element box.
+        const textRect = (range, node, index) => {
+            range.setStart(node, index);
+            range.setEnd(node, index + 1);
+            return range.getBoundingClientRect();
+        };
+
+        // One measuring pass: every character's resting position, read once.
+        const buildPanelGlyphs = () => {
+            const base = panel.getBoundingClientRect();
+            const overlay = document.createElement('div');
+            overlay.className = 'stream-panel-scramble';
+            overlay.setAttribute('aria-hidden', 'true');
+            const range = document.createRange();
+            const glyphs = [];
+            const layers = [];
+            let maxX = 1;
+
+            panelTextEls().forEach((el) => {
+                const node = el.firstChild;
+                if (!node || node.nodeType !== 3 || !node.nodeValue) return;
+                const text = node.nodeValue;
+                const style = window.getComputedStyle(el);
+                const layer = document.createElement('span');
+                layer.className = 'stream-panel-scramble-layer';
+                layer.style.fontFamily = style.fontFamily;
+                layer.style.fontSize = style.fontSize;
+                layer.style.fontStyle = style.fontStyle;
+                layer.style.fontWeight = style.fontWeight;
+                let probe = null;
+                for (let index = 0; index < text.length; index += 1) {
+                    const char = text[index];
+                    if (char === ' ' || char === '\u00A0') continue;
+                    const rect = textRect(range, node, index);
+                    if (!rect.width) continue;
+                    const x = rect.left - base.left;
+                    const glyph = document.createElement('span');
+                    glyph.className = 'stream-panel-glyph';
+                    glyph.textContent = char;
+                    glyph.style.left = `${x}px`;
+                    glyph.style.top = `${rect.top - base.top}px`;
+                    // Matching the measured text box leaves no half-leading, so
+                    // the glyph's baseline lands on the real character's.
+                    glyph.style.lineHeight = `${rect.height}px`;
+                    glyph.style.opacity = '0';
+                    layer.append(glyph);
+                    glyphs.push({ el: glyph, char, x, start: 0, end: 0, tick: -1, done: false });
+                    if (x > maxX) maxX = x;
+                    if (!probe) probe = { glyph, rect, label: el.className };
+                }
+                if (!layer.childNodes.length) return;
+                overlay.append(layer);
+                layers.push({ layer, probe });
+            });
+
+            if (!glyphs.length) return false;
+            glyphs.forEach((glyph) => {
+                glyph.start = (glyph.x / maxX) * GALLERY_SWEEP_MS;
+                glyph.end =
+                    glyph.start + GALLERY_CHAR_MIN_MS + Math.random() * GALLERY_CHAR_EXTRA_MS;
+            });
+            panelGlyphs = glyphs;
+            panelOverlay = overlay;
+            const checked = process.env.NODE_ENV !== 'production'
+                ? { scrollHeight: panel.scrollHeight, innerTop: panelInner.getBoundingClientRect().top }
+                : null;
+            panelTextEls().forEach((el) => {
+                el.style.visibility = 'hidden';
+            });
+            panelInner.setAttribute('aria-hidden', 'true');
+            panel.append(overlay);
+
+            // Absorb any residual offset rather than trusting the font metrics:
+            // compare a rendered glyph with the character it covers.
+            const report = [];
+            layers.forEach(({ layer, probe }) => {
+                if (!probe) return;
+                const shown = textRect(range, probe.glyph.firstChild, 0);
+                const dx = probe.rect.left - shown.left;
+                const dy = probe.rect.top - shown.top;
+                if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+                    layer.style.transform = `translate(${dx}px, ${dy}px)`;
+                }
+                if (checked) report.push({ line: probe.label, dx, dy, probe });
+            });
+
+            if (checked) {
+                const after = report.map(({ line, dx, dy, probe }) => {
+                    const fixed = textRect(range, probe.glyph.firstChild, 0);
+                    return {
+                        line,
+                        beforeDx: Number(dx.toFixed(2)),
+                        beforeDy: Number(dy.toFixed(2)),
+                        afterDx: Number((probe.rect.left - fixed.left).toFixed(2)),
+                        afterDy: Number((probe.rect.top - fixed.top).toFixed(2)),
+                    };
+                });
+                console.info('[panel] glyph vs real character offset', after);
+                console.info('[panel] overlay layout cost', {
+                    scrollHeight: panel.scrollHeight - checked.scrollHeight,
+                    innerTop: Number(
+                        (panelInner.getBoundingClientRect().top - checked.innerTop).toFixed(2)
+                    ),
+                });
+            }
+            return true;
+        };
+
+        const startPanelReveal = () => {
+            clearPanelReveal();
+            if (!GALLERY_PANEL_ENABLED || panel.hidden) return;
+            if (reducedMotion) return;
+            panel.setAttribute(
+                'aria-label',
+                panelTextEls().map((el) => el.textContent).filter(Boolean).join('. ')
+            );
+            if (!buildPanelGlyphs()) {
+                panel.removeAttribute('aria-label');
+                return;
+            }
+            panelRule.style.opacity = '0';
+            panelRule.style.clipPath = 'inset(0 100% 0 0)';
+            const t0 = performance.now();
+            const tick = (now) => {
+                panelRaf = 0;
+                const elapsed = now - t0;
+                let pending = 0;
+                for (let i = 0; i < panelGlyphs.length; i += 1) {
+                    const glyph = panelGlyphs[i];
+                    if (glyph.done) continue;
+                    if (elapsed < glyph.start) {
+                        pending += 1;
+                        continue;
+                    }
+                    if (elapsed >= glyph.end) {
+                        glyph.done = true;
+                        glyph.el.style.opacity = '1';
+                        if (glyph.el.textContent !== glyph.char) glyph.el.textContent = glyph.char;
+                        continue;
+                    }
+                    pending += 1;
+                    const amount = (elapsed - glyph.start) / (glyph.end - glyph.start);
+                    glyph.el.style.opacity = amount.toFixed(2);
+                    const step = Math.floor((elapsed - glyph.start) / SCRAMBLE_START_INTERVAL_MS);
+                    if (step !== glyph.tick) {
+                        glyph.tick = step;
+                        glyph.el.textContent = randomScrambleChar();
+                    }
+                }
+                const sweep = Math.min(1, elapsed / GALLERY_SWEEP_MS);
+                panelRule.style.opacity = String(Math.min(1, elapsed / 150));
+                panelRule.style.clipPath = `inset(0 ${((1 - sweep) * 100).toFixed(1)}% 0 0)`;
+                if (!pending && sweep >= 1) {
+                    clearPanelReveal();
+                    return;
+                }
+                panelRaf = requestAnimationFrame(tick);
+            };
+            panelRaf = requestAnimationFrame(tick);
+        };
+
+        // On open and on switch the panel drops out without a fade, so the new
+        // text never fades out before it fades in.
+        const hidePanelInstantly = () => {
+            if (!GALLERY_PANEL_ENABLED) return;
+            panelShown = false;
+            clearPanelReveal();
+            panel.classList.remove('is-leaving');
+            panel.style.transition = 'none';
+            panel.style.opacity = '0';
+            panel.style.pointerEvents = 'none';
+            void panel.offsetWidth;
+            panel.style.transition = '';
+        };
+
+        const setPanelText = (spec) => {
+            if (!GALLERY_PANEL_ENABLED) return;
+            const info = photoLabelFor(spec);
+            panelTitle.textContent = info ? info.title : '';
+            panelYear.textContent = info && info.year ? info.year : '';
+            panelDetails.textContent = (info && info.details) || GALLERY_DETAILS_PLACEHOLDER;
+            panelText.textContent = (info && info.description) || GALLERY_TEXT_PLACEHOLDER;
+            panel.hidden = !info;
+            panel.scrollTop = 0;
+        };
+
+        // Parked at the flyer's resting place, like the caption.
+        const placePanel = (layout) => {
+            if (!GALLERY_PANEL_ENABLED || panel.hidden || !layout?.panel) return;
+            const box = layout.panel;
+            panel.classList.toggle('is-below', !box.beside);
+            panel.style.width = `${Math.round(box.width)}px`;
+            panel.style.height = `${Math.round(box.height)}px`;
+            panel.style.transform =
+                `translate3d(${Math.round(box.left)}px, ${Math.round(box.top)}px, 0)`;
+        };
+
+        // Edge triggered: the sweep starts the moment the slide lands.
+        const syncPanel = () => {
+            if (!GALLERY_PANEL_ENABLED) return;
+            const show = !!viewer && viewer.phase === 'open' && !viewer.closeDone;
+            if (show === panelShown) return;
+            panelShown = show;
+            if (!show) {
+                stopPanelRevealLoop();
+                panel.style.opacity = '0';
+                panel.style.pointerEvents = 'none';
+                return;
+            }
+            panel.classList.remove('is-leaving');
+            panel.style.transition = 'none';
+            panel.style.opacity = '1';
+            panel.style.pointerEvents = 'auto';
+            void panel.offsetWidth;
+            panel.style.transition = '';
+            startPanelReveal();
+        };
+
         const finishViewer = () => {
             if (!viewer) return;
             const slot = viewer.slot;
+            const revealHome = homeTileStillThere(slot, viewer.shownKey, viewer.tileGone);
             const departures = viewer.departures;
             const flyer = activeFlyer;
-            viewer = null;
-            revealSlot(slot);
+            quietRows = new Set();
+            if (slot) quietRows.add(slot.row);
             departures.forEach((dep) => {
-                revealSlot(dep.slot);
-                releaseFlyer(dep.flyer);
+                if (dep.slot) quietRows.add(dep.slot.row);
+            });
+            quietRowsUntil = performance.now() + 1200;
+            viewer = null;
+            if (revealHome) revealSlot(slot);
+            const leftoverFlyers = [];
+            departures.forEach((dep) => {
+                if (homeTileStillThere(dep.slot, dep.shownKey, dep.tileGone)) {
+                    revealSlot(dep.slot);
+                }
+                if (dep.flyer?.root) dep.flyer.root.hidden = true;
+                leftoverFlyers.push(dep.flyer);
             });
             applyRows(0);
-            releaseFlyer(flyer);
+            if (flyer?.root) flyer.root.hidden = true;
             activeFlyer = homeFlyer;
-            unlockScroll();
             overlay.hidden = true;
             closeBtn.hidden = true;
             caption.style.opacity = '0';
             caption.hidden = true;
+            panelShown = false;
+            panel.classList.remove('is-leaving');
+            panel.style.opacity = '0';
+            panel.style.pointerEvents = 'none';
             closeBtn.style.willChange = 'auto';
             if (menuEl) {
                 menuEl.style.opacity = '';
@@ -1685,7 +2380,37 @@ function Clothing() {
                 hoverSlot.el.classList.remove('is-hovered');
                 hoverSlot = null;
             }
-            syncPlayback();
+            const settle = () => {
+                if (cancelled) return;
+                leftoverFlyers.concat(deferredFlyers).forEach((node) => {
+                    if (node && node !== homeFlyer && node !== activeFlyer) releaseFlyer(node);
+                });
+                deferredFlyers = [];
+                if (viewer) {
+                    if (flyer && flyer !== homeFlyer && flyer !== activeFlyer) releaseFlyer(flyer);
+                    return;
+                }
+                if (flyer === homeFlyer) releaseFlyer(homeFlyer);
+                else if (flyer && flyer !== activeFlyer) releaseFlyer(flyer);
+                clearPanelReveal();
+                resetOverlayClip();
+                panel.style.transition = '';
+                panel.hidden = true;
+                unlockScroll();
+                syncPlayback();
+                const repairLater = () => {
+                    if (cancelled || viewer) return;
+                    repairVisibleRows();
+                };
+                if (typeof requestIdleCallback === 'function') {
+                    requestIdleCallback(repairLater, { timeout: 500 });
+                } else {
+                    window.setTimeout(repairLater, 200);
+                }
+            };
+            postCloseFrame = requestAnimationFrame(() => {
+                postCloseFrame = requestAnimationFrame(settle);
+            });
         };
 
         const advanceDepartures = (now) => {
@@ -1694,20 +2419,41 @@ function Clothing() {
             viewer.departures = viewer.departures.filter((dep) => {
                 const raw = Math.min(1, (now - dep.t0) / duration);
                 const amount = easeClose(raw);
-                const live = poseFromThumb(liveThumb(dep.slot), dep.layout);
+                let next;
+                if (dep.closeExitRight) {
+                    next = { exitRight: true, pose: dep.closeTo };
+                } else {
+                    next = closeTargetFor(
+                        dep.slot,
+                        dep.layout,
+                        dep.tileGone,
+                        dep.homeThumbWidth,
+                        dep.shownKey,
+                        dep.homeRow
+                    );
+                    if (next.exitRight) {
+                        dep.from = startPoseFor(dep.pose, next.pose, amount);
+                        dep.closeExitRight = true;
+                        dep.closeTo = next.pose;
+                    }
+                }
                 const pose = reducedMotion
                     ? dep.from
-                    : lerpPose(dep.from, live, amount);
+                    : lerpPose(dep.from, next.pose, amount);
                 dep.pose = pose;
                 dep.thumbOpacity = 0;
                 dep.frameOpacity = frameOpacityFor('closing', amount);
-                dep.slot.el.style.opacity = '0';
+                if (!dep.tileGone) dep.slot.el.style.opacity = '0';
                 placeNode(dep.flyer, pose);
                 setFlyerFrame(dep.flyer, dep.frameOpacity);
                 if (reducedMotion) dep.flyer.root.style.opacity = String(1 - amount);
                 if (raw >= 1) {
-                    revealSlot(dep.slot);
-                    releaseFlyer(dep.flyer);
+                    if (homeTileStillThere(dep.slot, dep.shownKey, dep.tileGone)) {
+                        revealSlot(dep.slot);
+                    }
+                    if (dep.flyer?.root) dep.flyer.root.hidden = true;
+                    if (viewer && viewer.phase === 'closing') deferredFlyers.push(dep.flyer);
+                    else releaseFlyer(dep.flyer);
                     return false;
                 }
                 return true;
@@ -1735,6 +2481,7 @@ function Clothing() {
                     viewer.settled = true;
                     syncCloseButton();
                     syncCaption();
+                    syncPanel();
                 }
                 syncLargeFade(now);
                 return;
@@ -1759,15 +2506,34 @@ function Clothing() {
                 viewer.progress = raw;
                 viewer.thumbOpacity = 0;
                 viewer.frameOpacity = reducedMotion ? amount : frameOpacityFor(viewer.phase, amount);
-                const pose = reducedMotion ? viewer.to : lerpPose(viewer.from, viewer.to, amount);
+                const pose = reducedMotion
+                    ? viewer.openTo
+                    : lerpPose(viewer.from, viewer.openTo, amount);
                 if (reducedMotion) activeFlyer.root.style.opacity = String(amount);
                 placeOverlay(pose, viewer.layout);
                 syncLargeFade(now);
                 if (raw >= 1) {
-                    viewer.phase = 'open';
                     viewer.frameOpacity = 1;
                     activeFlyer.root.style.opacity = '1';
-                    activeFlyer.root.style.willChange = 'auto';
+                    if (viewer.needsSlide) {
+                        viewer.phase = 'sliding';
+                        viewer.slideT0 = now;
+                    } else {
+                        viewer.phase = 'open';
+                        closeBtn.style.willChange = 'auto';
+                    }
+                }
+            } else if (viewer.phase === 'sliding') {
+                const raw = Math.min(1, (now - viewer.slideT0) / GALLERY_SLIDE_MS);
+                const amount = easeInOut(raw);
+                viewer.progress = 1;
+                viewer.thumbOpacity = 0;
+                viewer.frameOpacity = 1;
+                const x = viewer.openTo.x + (viewer.to.x - viewer.openTo.x) * amount;
+                placeOverlay({ x, y: viewer.to.y, scale: 1 }, viewer.layout);
+                syncLargeFade(now);
+                if (raw >= 1) {
+                    viewer.phase = 'open';
                     closeBtn.style.willChange = 'auto';
                 }
             } else if (viewer.phase === 'open') {
@@ -1782,7 +2548,26 @@ function Clothing() {
                 viewer.thumbOpacity = 0;
                 viewer.frameOpacity = reducedMotion ? 1 - amount : frameOpacityFor('closing', amount);
                 viewer.closeDone = raw >= 1;
-                const live = poseFromThumb(liveThumb(viewer.slot), viewer.layout);
+                if (GALLERY_PANEL_ENABLED && !panel.hidden) {
+                    const fade = Math.min(1, (now - viewer.closeT0) / Math.max(1, GALLERY_TEXT_OUT_MS));
+                    panel.style.opacity = String(1 - fade);
+                }
+                if (!viewer.closeExitRight) {
+                    const next = closeTargetFor(
+                        viewer.slot,
+                        viewer.layout,
+                        viewer.tileGone,
+                        viewer.homeThumbWidth,
+                        viewer.shownKey,
+                        viewer.homeRow
+                    );
+                    if (next.exitRight) {
+                        viewer.closeFrom = startPoseFor(viewer.pose, next.pose, amount);
+                        viewer.closeExitRight = true;
+                    }
+                    viewer.closeTo = next.pose;
+                }
+                const live = viewer.closeTo;
                 const pose = reducedMotion ? viewer.closeFrom : lerpPose(viewer.closeFrom, live, amount);
                 if (reducedMotion) activeFlyer.root.style.opacity = String(1 - amount);
                 placeOverlay(pose, viewer.layout);
@@ -1791,14 +2576,17 @@ function Clothing() {
             advanceDepartures(now);
 
             if (!viewer) return;
-            syncCloseButton();
-            syncCaption();
+            if (viewer.phase !== 'closing') {
+                syncCloseButton();
+                syncCaption();
+                syncPanel();
+            }
 
             if (viewer.phase === 'closing' && viewer.closeDone) {
-                const live = poseFromThumb(liveThumb(viewer.slot), viewer.layout);
-                if (!reducedMotion) placeOverlay(live, viewer.layout);
-                viewer.thumbOpacity = 1;
-                revealSlot(viewer.slot);
+                if (!viewer.closeExitRight) {
+                    viewer.thumbOpacity = 1;
+                    revealSlot(viewer.slot);
+                }
                 activeFlyer.root.hidden = true;
                 if (viewer.departures.length === 0) finishViewer();
             }
@@ -1811,11 +2599,10 @@ function Clothing() {
             const now = performance.now();
             lockScroll();
             cacheStreamOrigin();
-            const frames = visibleBounds();
-            const bases = measureRows();
-            const layout = layoutViewer(spec, bases, slot);
+            const layout = layoutViewer(spec, slot);
             const from = poseFromThumb(liveThumb(slot), layout);
             const to = { x: layout.endLeft, y: layout.endTop, scale: 1 };
+            const opening = openTargetFor(layout);
 
             activeFlyer = homeFlyer;
             viewer = {
@@ -1827,11 +2614,16 @@ function Clothing() {
                 duration: transitionMs,
                 from,
                 to,
+                openTo: opening.pose,
+                needsSlide: opening.slide,
+                slideT0: 0,
                 pose: from,
                 layout,
-                rowBases: bases,
-                frameTop: frames.first,
-                frameBottom: frames.last,
+                hiddenRows: hiddenRowsFor(layout),
+                tileGone: false,
+                closeExitRight: false,
+                homeThumbWidth: slot.width,
+                homeRow: slot.row,
                 rowMotion: 'in',
                 rowT0: now,
                 rowAmount: 0,
@@ -1863,6 +2655,10 @@ function Clothing() {
             caption.style.opacity = '0';
             setCaptionText(spec);
             placeCaption(layout);
+            hidePanelInstantly();
+            setPanelText(spec);
+            placePanel(layout);
+            clipOverlayToHeader();
             overlay.hidden = false;
             closeBtn.hidden = false;
             closeBtn.style.opacity = '0';
@@ -1882,11 +2678,11 @@ function Clothing() {
             closeBtn.focus({ preventScroll: true });
         };
 
-        const isFramingRow = (rowIndex) =>
-            !!viewer && (rowIndex === viewer.frameTop || rowIndex === viewer.frameBottom);
+        const isFramingRow = (rowIndex) => rowStaysVisible(rowIndex);
 
         const switchTo = (slot) => {
-            if (!viewer || viewer.phase === 'closing' || slot === viewer.slot) return;
+            if (!viewer || viewer.phase === 'closing') return;
+            if (slot === viewer.slot && !viewer.tileGone) return;
             if (!isFramingRow(slot.row)) return;
 
             const now = performance.now();
@@ -1905,7 +2701,7 @@ function Clothing() {
             } else {
                 spec = displayedSpec(slot);
                 if (!spec) return;
-                layout = layoutViewer(spec, viewer.rowBases, slot);
+                layout = layoutViewer(spec, slot);
                 node = trackFlyer(makeFlyer());
                 from = poseFromThumb(liveThumb(slot), layout);
                 configureFlyer(node, layout, spec);
@@ -1923,6 +2719,10 @@ function Clothing() {
                 t0: now,
                 thumbOpacity: 0,
                 frameOpacity: viewer.frameOpacity || 1,
+                tileGone: !!viewer.tileGone,
+                closeExitRight: false,
+                homeThumbWidth: viewer.homeThumbWidth,
+                homeRow: viewer.homeRow,
             });
             activeFlyer = node;
             node.root.style.willChange = 'transform';
@@ -1931,12 +2731,22 @@ function Clothing() {
             viewer.slot = slot;
             viewer.spec = spec;
             viewer.shownKey = photoKey(spec);
+            viewer.tileGone = false;
+            viewer.closeExitRight = false;
+            viewer.homeThumbWidth = slot.width;
+            viewer.homeRow = slot.row;
             viewer.phase = 'switching';
             viewer.t0 = now;
             viewer.from = from;
             viewer.to = { x: layout.endLeft, y: layout.endTop, scale: 1 };
+            const switchOpening = openTargetFor(layout);
+            viewer.openTo = switchOpening.pose;
+            viewer.needsSlide = switchOpening.slide;
+            viewer.slideT0 = 0;
             viewer.pose = from;
             viewer.layout = layout;
+            viewer.hiddenRows = hiddenRowsFor(layout);
+            applyRows(viewer.rowAmount || 1);
             viewer.thumbOpacity = 0;
             viewer.frameOpacity = 0;
             viewer.progress = 0;
@@ -1957,6 +2767,9 @@ function Clothing() {
             caption.style.opacity = '0';
             setCaptionText(spec);
             placeCaption(layout);
+            hidePanelInstantly();
+            setPanelText(spec);
+            placePanel(layout);
             node.root.hidden = false;
             sizeFlyer(node, layout);
             if (!viewer.largeReady) armLarge(node, spec);
@@ -1969,18 +2782,33 @@ function Clothing() {
             if (!viewer || viewer.phase === 'closing') return;
             const now = performance.now();
             const duration = Math.max(1, viewer.duration);
-            const opened = viewer.phase === 'open' ? 1 : Math.min(1, viewer.progress || 0);
             viewer.phase = 'closing';
+            viewer.settled = false;
             viewer.rowMotion = 'out';
             viewer.rowT0 = now;
             viewer.closeFrom = viewer.pose;
             viewer.closeT0 = now;
-            viewer.closeDuration = reducedMotion
-                ? duration
-                : Math.max(220, duration * Math.max(0.35, opened));
+            viewer.closeDuration = duration;
+            const closingTo = closeTargetFor(
+                viewer.slot,
+                viewer.layout,
+                viewer.tileGone,
+                viewer.homeThumbWidth,
+                viewer.shownKey,
+                viewer.homeRow
+            );
+            viewer.closeExitRight = closingTo.exitRight;
+            viewer.closeTo = closingTo.pose;
             viewer.closeDone = false;
             viewer.thumbOpacity = 0;
             caption.style.opacity = '0';
+            // Freeze the sweep where it is; opacity is driven on the same rAF
+            // as the shrink so the CSS panel transition cannot fight it.
+            stopPanelRevealLoop();
+            panelShown = false;
+            panel.classList.add('is-leaving');
+            panel.style.transition = 'none';
+            panel.style.pointerEvents = 'none';
             closeBtn.style.opacity = '0';
             closeBtn.style.pointerEvents = 'none';
             activeFlyer.root.style.willChange = 'transform, opacity';
@@ -1995,7 +2823,7 @@ function Clothing() {
                 return;
             }
             if (viewer.phase === 'closing' || !isFramingRow(slot.row)) return;
-            if (slot === viewer.slot) return;
+            if (slot === viewer.slot && !viewer.tileGone) return;
             switchTo(slot);
         };
 
@@ -2052,10 +2880,30 @@ function Clothing() {
             });
         };
 
+        const slotIsLive = (slot) =>
+            !!(
+                slot
+                && slot.el
+                && rows[slot.row]
+                && slot.el.parentNode === rows[slot.row]
+            );
+
+        const purgeDeadSlots = (rowIndex) => {
+            for (let i = pool.length - 1; i >= 0; i -= 1) {
+                const slot = pool[i];
+                if (rowIndex != null && slot.row !== rowIndex) continue;
+                if (slotIsLive(slot)) continue;
+                releaseReserved(slot.spec);
+                pool.splice(i, 1);
+            }
+        };
+
         const populateRow = (rowIndex, specs, mode) => {
             const rowEl = rows[rowIndex];
             if (!rowEl) return;
+            purgeDeadSlots(rowIndex);
             rowEl.replaceChildren();
+            purgeDeadSlots(rowIndex);
 
             const slots = specs.map((spec, i) => {
                 const el = document.createElement('div');
@@ -2069,7 +2917,7 @@ function Clothing() {
                     aspectRatio: 1,
                     speed: 0,
                     scale: 1,
-                    frozen: false,
+                    frozen: holdMotion,
                     swayPhase: hash01(rowIndex * 50 + i) * Math.PI * 2,
                 };
                 bindItem(slot);
@@ -2108,7 +2956,10 @@ function Clothing() {
         };
 
         const packRow = (rowIndex, fromRight) => {
-            const mine = pool.filter((slot) => slot.row === rowIndex).sort((a, b) => a.x - b.x);
+            if (rowLayoutQuiet(rowIndex)) return;
+            const mine = pool
+                .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
+                .sort((a, b) => a.x - b.x);
             const packFromRight = fromRight === undefined ? introEntering.has(rowIndex) : fromRight;
             if (packFromRight) {
                 for (let i = mine.length - 2; i >= 0; i -= 1) {
@@ -2124,19 +2975,25 @@ function Clothing() {
         };
 
         const rowNeedsCoverage = (rowIndex, mode) => {
-            const mine = pool.filter((slot) => slot.row === rowIndex);
+            const mine = pool
+                .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
+                .sort((a, b) => a.x - b.x);
             if (!mine.length) return true;
             let left = mine[0];
-            let right = mine[0];
-            mine.forEach((slot) => {
-                if (slot.x < left.x) left = slot;
-                if (slot.x + slot.width > right.x + right.width) right = slot;
-            });
+            let right = mine[mine.length - 1];
             const needed = viewportWidth + left.width + right.width;
             const span = right.x + right.width - left.x;
             if (span < needed) return true;
             if (mode === 'enter-left') return false;
             return left.x > -left.width || right.x + right.width < viewportWidth + right.width;
+        };
+
+        const isRealGap = (gap, widthA, widthB) => {
+            const tile = Math.min(
+                widthA > 0 ? widthA : itemHeight,
+                widthB > 0 ? widthB : itemHeight
+            );
+            return gap > ITEM_GAP_PX + tile * 0.5;
         };
 
         const appendSlotToRow = (rowIndex, spec, side) => {
@@ -2161,7 +3018,7 @@ function Clothing() {
             applyVisuals(slot, spec);
             slot.speed = speedFor(slot.id);
             applyDepth(slot);
-            const mine = pool.filter((entry) => entry.row === rowIndex);
+            const mine = pool.filter((entry) => entry.row === rowIndex && slotIsLive(entry));
             if (side === 'left') {
                 const left = mine.reduce((best, entry) => (!best || entry.x < best.x ? entry : best), null);
                 slot.x = left ? left.x - slot.width - ITEM_GAP_PX : -slot.width;
@@ -2179,7 +3036,71 @@ function Clothing() {
             return slot;
         };
 
+        const insertSlotAt = (rowIndex, spec, x) => {
+            const slot = appendSlotToRow(rowIndex, spec, 'right');
+            if (!slot) return null;
+            slot.x = x;
+            paint(slot);
+            return slot;
+        };
+
+        const shiftSlotsFrom = (rowIndex, minX, delta) => {
+            if (!delta || rowLayoutQuiet(rowIndex)) return;
+            pool.forEach((slot) => {
+                if (slot.row !== rowIndex || !slotIsLive(slot)) return;
+                if (slot.x < minX - 0.5) return;
+                slot.x += delta;
+                paint(slot);
+            });
+        };
+
+        const fillRealGap = (rowIndex, leftX, rightX, leftWidth, rightWidth, grow) => {
+            if (rowLayoutQuiet(rowIndex)) return 0;
+            let added = 0;
+            let left = leftX;
+            let right = rightX;
+            for (let n = 0; n < 80; n += 1) {
+                if (!isRealGap(right - left, leftWidth, rightWidth)) return added;
+                const spec = dealUniqueSpec();
+                const width = spec
+                    ? itemHeight * (spec.aspectRatio || aspectFor(spec) || 1)
+                    : 0;
+                const x = grow === 'left'
+                    ? right - ITEM_GAP_PX - width
+                    : left + ITEM_GAP_PX;
+                const fits = spec && (
+                    grow === 'left'
+                        ? x >= left + ITEM_GAP_PX - 0.5
+                        : x + width + ITEM_GAP_PX <= right + 0.5
+                );
+                if (!fits) {
+                    if (spec) releaseReserved(spec);
+                    if (grow !== 'left') {
+                        const close = right - left - ITEM_GAP_PX;
+                        if (close > 0.5) shiftSlotsFrom(rowIndex, right, -close);
+                    }
+                    return added;
+                }
+                const slot = insertSlotAt(rowIndex, spec, x);
+                if (!slot) return added;
+                if (!slotHasLoadedPhoto(slot)) {
+                    decodeOntoSlot(slot, libraryByKey.get(photoKey(spec)) || spec);
+                }
+                if (grow === 'left') {
+                    right = slot.x;
+                    rightWidth = slot.width;
+                } else {
+                    left = slot.x + slot.width;
+                    leftWidth = slot.width;
+                }
+                added += 1;
+            }
+            return added;
+        };
+
         const fillRowToCover = async (rowIndex, mode) => {
+            if (rowLayoutQuiet(rowIndex)) return;
+            purgeDeadSlots(rowIndex);
             for (let n = 0; n < 80 && rowNeedsCoverage(rowIndex, mode); n += 1) {
                 const spec = dealUniqueSpec();
                 if (!spec) break;
@@ -2195,7 +3116,6 @@ function Clothing() {
                     decodeOntoSlot(slot, libraryByKey.get(photoKey(spec)) || spec);
                 }
             }
-            packRow(rowIndex, mode === 'enter-left');
         };
 
         const assignRowPhotos = (rowIndex) => {
@@ -2218,20 +3138,24 @@ function Clothing() {
         let holdMotion = false;
         const startRow = (rowIndex, mode) => {
             const rowEl = rows[rowIndex];
-            if (cancelled || startedRows.has(rowIndex) || !rowEl) return Promise.resolve();
+            if (cancelled || !rowEl) return Promise.resolve();
+            rowEpoch[rowIndex] = (rowEpoch[rowIndex] || 0) + 1;
+            const epoch = rowEpoch[rowIndex];
             startedRows.add(rowIndex);
+            rowPending.add(rowIndex);
             introPlan.delete(rowIndex);
             const raws = assignRowPhotos(rowIndex);
-            const stillHere = () => !cancelled && rows[rowIndex] === rowEl && rowEl.isConnected;
+            const stillHere = () =>
+                !cancelled
+                && rowEpoch[rowIndex] === epoch
+                && rows[rowIndex] === rowEl
+                && rowEl.isConnected;
             const abortStart = () => {
                 raws.forEach(releaseReserved);
-                if (rows[rowIndex] === rowEl) {
-                    startedRows.delete(rowIndex);
-                    introEntering.delete(rowIndex);
-                } else if (!rows[rowIndex]) {
-                    startedRows.delete(rowIndex);
-                    introEntering.delete(rowIndex);
-                }
+                if (rowEpoch[rowIndex] !== epoch) return;
+                startedRows.delete(rowIndex);
+                rowPending.delete(rowIndex);
+                introEntering.delete(rowIndex);
             };
             const job = (async () => {
                 const decoded = await mapWithConcurrency(raws, DECODE_CONCURRENCY, decodeSmall);
@@ -2263,6 +3187,7 @@ function Clothing() {
                 if (mode !== 'enter-left') rowEl.style.visibility = 'hidden';
                 populateRow(rowIndex, specs, mode);
                 await fillRowToCover(rowIndex, mode);
+                packRow(rowIndex, mode === 'enter-left');
                 if (!stillHere()) {
                     abortStart();
                     return;
@@ -2291,6 +3216,9 @@ function Clothing() {
                 scheduleUpcoming();
                 syncPlayback();
             })();
+            job.finally(() => {
+                if (rowEpoch[rowIndex] === epoch) rowPending.delete(rowIndex);
+            });
             if (bootPromises) bootPromises.push({ index: rowIndex, job });
             return job;
         };
@@ -2346,9 +3274,13 @@ function Clothing() {
             }
             releaseRow(rowEl);
             rows[index] = null;
+            rowEpoch[index] = (rowEpoch[index] || 0) + 1;
             startedRows.delete(index);
+            rowPending.delete(index);
             introPlan.delete(index);
             introEntering.delete(index);
+            const assigned = rowAssignments.get(index);
+            if (assigned) assigned.forEach(releaseReserved);
             rowAssignments.delete(index);
         };
 
@@ -2362,7 +3294,11 @@ function Clothing() {
                 rowPose[index] = { ty: 0, scale: 1 };
             }
             placeRow(index);
-            if (startedRows.has(index) || introPlan.has(index)) return;
+            const live = pool.some((slot) => slot.row === index && slotIsLive(slot));
+            if (startedRows.has(index) && live) return;
+            if (rowPending.has(index)) return;
+            if (introPlan.has(index) && pageScroll() < 8) return;
+            if (introPlan.has(index)) introPlan.delete(index);
             startRow(index, 'filled');
         };
 
@@ -2390,7 +3326,122 @@ function Clothing() {
                 if (!rows[index]) continue;
                 if (index < from || index > to) removeRow(index);
             }
-            for (let index = from; index <= to; index += 1) placeRow(index);
+            const keep = new Set();
+            pool.forEach((slot) => {
+                const key = photoKey(slot.spec);
+                if (key) keep.add(key);
+            });
+            rowAssignments.forEach((raws) => {
+                raws.forEach((item) => {
+                    const key = photoKey(item);
+                    if (key) keep.add(key);
+                });
+            });
+            [...reserved].forEach((key) => {
+                if (!keep.has(key)) reserved.delete(key);
+            });
+            repairVisibleRows(from, to);
+        };
+
+        const introProtect = (index) => introPlan.has(index) && pageScroll() < 8;
+
+        const rowLooksInvisible = (rowEl) => {
+            if (!rowEl) return true;
+            return (
+                rowEl.style.visibility === 'hidden'
+                || rowEl.style.opacity === '0'
+                || rowEl.dataset.opacity === '0'
+            );
+        };
+
+        const warnRowRepair = (index, issue, extra) => {
+            if (process.env.NODE_ENV === 'production') return;
+            console.warn('[clothing] repaired row', {
+                row: index,
+                issue,
+                introWaiting: introPlan.has(index),
+                entering: introEntering.has(index),
+                started: startedRows.has(index),
+                scroll: Math.round(pageScroll()),
+                ...extra,
+            });
+        };
+
+        const repairVisibleRows = (from, to) => {
+            if (cancelled) return;
+            if (from == null || to == null) {
+                const bounds = visibleBounds();
+                const buffer =
+                    window.innerWidth <= MOBILE_BREAKPOINT_PX ? MOBILE_ROW_BUFFER : ROW_BUFFER;
+                from = Math.max(0, bounds.first - buffer);
+                to = bounds.last + buffer;
+            }
+            purgeDeadSlots();
+            if (!holdMotion) {
+                pool.forEach((slot) => {
+                    if (slot.frozen) slot.frozen = false;
+                });
+            }
+            for (let index = from; index <= to; index += 1) {
+                if (rowLayoutQuiet(index)) continue;
+                if (introProtect(index)) continue;
+                if (!rows[index]) {
+                    warnRowRepair(index, 'missing');
+                    ensureRow(index);
+                    continue;
+                }
+                const rowEl = rows[index];
+                if (!viewer && !rowPending.has(index) && rowLooksInvisible(rowEl)) {
+                    warnRowRepair(index, 'invisible', {
+                        opacity: rowEl.style.opacity || rowEl.dataset.opacity || '',
+                        visibility: rowEl.style.visibility || '',
+                    });
+                    rowEl.style.opacity = '';
+                    rowEl.style.visibility = '';
+                    rowEl.removeAttribute('data-opacity');
+                    rowEl.removeAttribute('data-blocked');
+                    rowEl.style.pointerEvents = '';
+                }
+                if (introEntering.has(index) && !rowIsEnteringFromLeft(index)) {
+                    introEntering.delete(index);
+                }
+                if (introEntering.has(index)) continue;
+                const live = pool
+                    .filter((slot) => slot.row === index && slotIsLive(slot))
+                    .sort((a, b) => a.x - b.x);
+                if (!live.length) {
+                    if (rowPending.has(index)) continue;
+                    warnRowRepair(index, 'empty', {
+                        detached: pool.filter((slot) => slot.row === index).length,
+                    });
+                    startRow(index, 'filled');
+                    continue;
+                }
+                const first = live[0];
+                const last = live[live.length - 1];
+                let added = fillRealGap(index, 0, first.x, first.width, first.width, 'left');
+                for (let i = 1; i < live.length; i += 1) {
+                    const prev = live[i - 1];
+                    const next = live[i];
+                    added += fillRealGap(
+                        index,
+                        prev.x + prev.width,
+                        next.x,
+                        prev.width,
+                        next.width,
+                        'right'
+                    );
+                }
+                added += fillRealGap(
+                    index,
+                    last.x + last.width,
+                    viewportWidth,
+                    last.width,
+                    last.width,
+                    'right'
+                );
+                if (added) warnRowRepair(index, 'gap', { added });
+            }
         };
 
         const scheduleIntroRow = (index, at) => {
@@ -2412,26 +3463,12 @@ function Clothing() {
         const outlineFor = (slot) => {
             if (!slot?.spec || !(slot.width > 0)) return 0;
             const border = viewerBorderPx();
-            const bases = [];
-            const top = streamOriginY - pageScroll();
-            const stride = stridePx();
-            for (let index = 0; index < rows.length; index += 1) {
-                if (!rows[index]) continue;
-                bases[index] = {
-                    top: top + index * stride,
-                    left: streamOriginX,
-                    width: viewportWidth,
-                    height: itemHeight,
-                };
-            }
-            const innerWidth = layoutViewer(slot.spec, bases, slot).inner.width;
+            const innerWidth = layoutViewer(slot.spec, slot).inner.width;
             if (!(innerWidth > 0)) return 0;
             return Math.max(1, Math.round((border / innerWidth) * slot.width));
         };
 
         const slotUnderPointer = () => {
-            const originY = streamOriginY - pageScroll();
-            const originX = streamOriginX - (window.scrollX || window.pageXOffset || 0);
             const stride = stridePx();
             for (let i = pool.length - 1; i >= 0; i -= 1) {
                 const slot = pool[i];
@@ -2439,12 +3476,13 @@ function Clothing() {
                 if (!slotHasLoadedPhoto(slot)) continue;
                 if (slot.el.style.pointerEvents === 'none') continue;
                 if (slot.el.style.opacity === '0' || slot.paintedOpacity === 0) continue;
-                if (viewer && (!isFramingRow(slot.row) || slot === viewer.slot)) continue;
+                if (viewer && (!rowStaysVisible(slot.row) || (slot === viewer.slot && !viewer.tileGone))) continue;
                 const scale = slot.scale || 1;
                 const width = slot.width * scale;
                 const height = itemHeight * scale;
-                const left = originX + slot.x + (slot.width - width) / 2;
-                const top = originY + slot.row * stride + (itemHeight - height) / 2;
+                const left = viewOriginX + slot.x + (slot.width - width) / 2;
+                const top = viewOriginY
+                    + slot.row * stride + (itemHeight - height) / 2;
                 if (
                     pointerX >= left
                     && pointerX < left + width
@@ -2492,6 +3530,10 @@ function Clothing() {
             if (slot.labelShift === shift) return;
             slot.labelShift = shift;
             label.style.left = shift ? `${shift}px` : '';
+            if (slot.labelAbove) {
+                slot.labelAbove = false;
+                label.classList.remove('is-label-above');
+            }
         };
 
         // Written when the hover starts, so a recycled tile can never show the
@@ -2503,8 +3545,10 @@ function Clothing() {
             slot.labelTitleEl.textContent = info ? info.title : '';
             slot.labelYearEl.textContent = info && info.year ? `, ${info.year}` : '';
             slot.labelWidth = info ? label.offsetWidth : 0;
+            slot.labelHeight = info ? label.offsetHeight : 0;
             slot.labelPastEdge = null;
             slot.labelShift = null;
+            slot.labelAbove = null;
             alignLabel(slot);
         };
 
@@ -2551,7 +3595,7 @@ function Clothing() {
         }
 
         const warnEmptyVisibleTiles = () => {
-            const originY = streamOriginY - pageScroll();
+            const originY = viewOriginY;
             const stride = stridePx();
             const viewTop = 0;
             const viewBottom = viewHeight();
@@ -2582,6 +3626,8 @@ function Clothing() {
             if (!running) return;
             const dt = lastTime ? Math.min(MAX_FRAME_SECONDS, (now - lastTime) / 1000) : 0;
             lastTime = now;
+            const closing = viewer && viewer.phase === 'closing';
+            if (!closing) purgeDeadSlots();
 
             const motionScale = reducedMotion ? REDUCED_MOTION_SPEED_SCALE : 1;
             if (motionScale > 0 && dt > 0) {
@@ -2594,7 +3640,7 @@ function Clothing() {
                         recycle(slot);
                         continue;
                     }
-                    ensureReadyBeforeVisible(slot);
+                    if (!closing) ensureReadyBeforeVisible(slot);
                     const rowHidden = rows[slot.row]?.dataset.opacity === '0';
                     if (!rowHidden || slotIsHeld(slot)) paint(slot);
                 }
@@ -2603,12 +3649,12 @@ function Clothing() {
             }
 
             advanceViewer(now, dt);
-            if (fineHover) syncHover();
-            if (process.env.NODE_ENV !== 'production') {
+            if (fineHover && !closing) syncHover();
+            if (!closing && process.env.NODE_ENV !== 'production') {
                 warnEmptyVisibleTiles();
                 warnOnScreenDuplicates();
             }
-            if (readyPoolCount() < readyPoolMin()) pumpSmalls();
+            if (!closing && readyPoolCount() < readyPoolMin()) pumpSmalls();
 
             if (running) rafId = requestAnimationFrame(tick);
         };
@@ -2650,7 +3696,7 @@ function Clothing() {
             pointerY = event.clientY;
             if (viewer.phase === 'open') {
                 const slot = slotUnderPointer();
-                if (slot && isFramingRow(slot.row) && slot !== viewer.slot) {
+                if (slot && isFramingRow(slot.row) && (slot !== viewer.slot || viewer.tileGone)) {
                     switchTo(slot);
                     return;
                 }
@@ -2659,6 +3705,13 @@ function Clothing() {
         });
         closeBtn.addEventListener('click', (event) => {
             event.stopPropagation();
+            closeViewer();
+        });
+        // Acts like the overlay, except while text in it is selected.
+        panel.addEventListener('click', () => {
+            if (!viewer) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed) return;
             closeViewer();
         });
         const onKeyDown = (event) => {
@@ -2726,7 +3779,8 @@ function Clothing() {
 
         let scrollFrame = 0;
         const onScroll = () => {
-            if (scrollLockY != null || pageIsZoomed()) return;
+            if (suppressScroll || scrollLockY != null || pageIsZoomed()) return;
+            if (viewer && viewer.phase === 'closing') return;
             const y = pageScroll();
             const t = performance.now();
             if (lastScrollT) {
@@ -2737,11 +3791,12 @@ function Clothing() {
             if (scrollFrame) return;
             scrollFrame = requestAnimationFrame(() => {
                 scrollFrame = 0;
-                if (cancelled || scrollLockY != null) return;
+                if (cancelled || suppressScroll || scrollLockY != null) return;
+                if (viewer && viewer.phase === 'closing') return;
                 pumpSmalls();
                 const { first, last } = visibleBounds();
-                if (`${first}:${last}` === mountedKey) return;
-                mountRange();
+                if (`${first}:${last}` !== mountedKey) mountRange();
+                else repairVisibleRows();
             });
         };
         window.addEventListener('scroll', onScroll, { passive: true });
@@ -2753,18 +3808,7 @@ function Clothing() {
             resizeFrame = requestAnimationFrame(() => {
                 resizeFrame = 0;
                 if (cancelled || pageIsZoomed()) return;
-                if (viewer) {
-                    viewer.rowBases = measureRows();
-                    viewer.layout = layoutViewer(viewer.spec, viewer.rowBases, viewer.slot);
-                    viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
-                    if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
-                    placeCaption(viewer.layout);
-                    cacheStreamOrigin();
-                    if (fineHover && hoverSlot) {
-                        hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
-                    }
-                    return;
-                }
+                if (viewer && viewer.phase === 'closing') return;
                 const previousHeight = itemHeight;
                 applyLayoutMetrics();
                 allocatedRows = 0;
@@ -2792,6 +3836,20 @@ function Clothing() {
                     fillRowToCover(index, entering.has(index) ? 'enter-left' : 'filled')
                 );
                 mountRange();
+                if (viewer) {
+                    clipOverlayToHeader();
+                    viewer.layout = layoutViewer(viewer.spec, viewer.slot);
+                    viewer.hiddenRows = hiddenRowsFor(viewer.layout);
+                    viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
+                    const resized = openTargetFor(viewer.layout);
+                    viewer.openTo = resized.pose;
+                    if (viewer.phase !== 'sliding') viewer.needsSlide = resized.slide;
+                    if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
+                    placeCaption(viewer.layout);
+                    placePanel(viewer.layout);
+                    applyRows(viewer.rowMotion === 'hold' ? 1 : (viewer.rowAmount || 0));
+                    viewer.settled = false;
+                }
                 if (fineHover && hoverSlot) {
                     hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
                     syncLabel(hoverSlot);
@@ -2805,8 +3863,15 @@ function Clothing() {
             window.visualViewport.addEventListener('scroll', onScroll);
         }
 
+        const repairTimer = window.setInterval(() => {
+            if (cancelled || suppressScroll || scrollLockY != null) return;
+            if (viewer) return;
+            repairVisibleRows();
+        }, 500);
+
         return () => {
             cancelled = true;
+            window.clearInterval(repairTimer);
             clearIntroTimers();
             pause();
             intersection.disconnect();
@@ -2824,6 +3889,7 @@ function Clothing() {
             }
             if (resizeFrame) cancelAnimationFrame(resizeFrame);
             if (scrollFrame) cancelAnimationFrame(scrollFrame);
+            if (postCloseFrame) cancelAnimationFrame(postCloseFrame);
             unlockScroll();
             section.replaceChildren();
             if (menuEl) {
@@ -2834,6 +3900,8 @@ function Clothing() {
             flyers.forEach((node) => node.root.remove());
             closeBtn.remove();
             caption.remove();
+            clearPanelReveal();
+            panel.remove();
             pool.forEach((slot) => slot.el.remove());
             decodedSpecs.forEach((spec) => {
                 if (spec?.objectUrl) URL.revokeObjectURL(spec.objectUrl);
