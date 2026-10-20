@@ -8,14 +8,11 @@
     --stacks-header: 6.25rem;
     --stacks-pad-y: 1.2rem;
     --stacks-pad-x: 2.5rem;
-    /* Extra AABB per side for a square rotated TWIST_MAX_DEG (25). */
-    --twist-overhang-ratio: calc((cos(25deg) + sin(25deg) - 1) / 2);
-    /* 2.18 = two rows of (card + 9% title/twist gap). +overhang keeps the
-       top-row twist below the header instead of clipping it. */
+    /* 2.18 = two rows of (card + 9% title/twist gap). */
     --card-size: clamp(
         120px,
         min(
-            calc((100dvh - var(--stacks-header) - var(--stacks-pad-y) - var(--stack-gap-y) - 2 * var(--stack-title) - 4 * var(--stack-pad)) / (2.18 + var(--twist-overhang-ratio))),
+            calc((100dvh - var(--stacks-header) - var(--stacks-pad-y) - var(--stack-gap-y) - 2 * var(--stack-title) - 4 * var(--stack-pad)) / 2.18),
             calc((100vw - var(--stacks-pad-x) - var(--stack-gap-x) - 4 * var(--stack-pad)) / 2)
         ),
         480px
@@ -28,8 +25,17 @@
 }
 
 .design-page .header-container {
-    z-index: 90;
+    z-index: auto;
     flex: 0 0 auto;
+}
+
+.design-page .header-logo {
+    position: relative;
+    z-index: 90;
+}
+
+.design-page .header-nav {
+    z-index: 90;
 }
 
 .design-stacks {
@@ -38,7 +44,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    padding: calc(0.35rem + var(--card-size) * var(--twist-overhang-ratio)) 1.25rem 0.85rem;
+    padding: 0.35rem 1.25rem 0.85rem;
     box-sizing: border-box;
     overflow: visible;
 }
@@ -312,7 +318,7 @@
     .design-stacks {
         overflow: auto;
         align-items: flex-start;
-        padding: calc(1.5rem + var(--card-size) * var(--twist-overhang-ratio)) 1rem 4rem;
+        padding: 1.5rem 1rem 4rem;
     }
 
     .design-stacks-grid {
