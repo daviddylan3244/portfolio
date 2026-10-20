@@ -50,7 +50,6 @@ const ITEM_HEIGHT_VW = 10;
 const ITEM_HEIGHT_MAX_PX = 120;
 
 const ITEM_GAP_PX = 40;
-const VERTICAL_GAP_RATIO = 0.5; // gap between rows, as a fraction of item height
 
 // First intro row starts as soon as its images are ready.
 const INTRO_FIRST_DELAY_SECONDS = 0.0;
@@ -100,7 +99,7 @@ const LARGE_CACHE_LIMIT = 8;
 const OPEN_TRANSITION_MS = 450;
 const OPEN_EASE_POINTS = [0.22, 1, 0.36, 1];
 const OPEN_EASING = `cubic-bezier(${OPEN_EASE_POINTS.join(', ')})`;
-const CLOSE_EASE_POINTS = [0.65, 0, 0.35, 1];
+const CLOSE_EASE_POINTS = [0.22, 1, 0.36, 1];
 const CLOSE_EASING = `cubic-bezier(${CLOSE_EASE_POINTS.join(', ')})`;
 const REDUCED_MOTION_VIEWER_MS = 180;
 const VIEWER_GAP_PX = 32;
@@ -137,6 +136,9 @@ const STREAM_LIBRARY = Array.from({ length: PHOTO_COUNT }, (_, index) => index +
 
 // Wall label text, keyed by photo number. Returns null when there is no title.
 const LABEL_EDGE_PAD_PX = 8;
+const LABEL_GAP_PX = 6;
+const LABEL_BREATH_PX = 4;
+const HEADER_TO_ROW_GAP_PX = 18;
 
 function photoLabelFor(spec) {
     const info = spec && spec.number != null ? photoInfo[spec.number] : null;
@@ -242,6 +244,16 @@ function viewerBorderPx() {
     );
 }
 
+function hoverOutlineEstimatePx() {
+    return Math.max(6, Math.round(viewerBorderPx() * 0.3));
+}
+
+function labelClearancePx(height) {
+    const fontPx = Math.max(11, Math.min(13, height * 0.12));
+    const labelH = Math.ceil(fontPx * 1.2);
+    return labelH + LABEL_GAP_PX + hoverOutlineEstimatePx() + LABEL_BREATH_PX;
+}
+
 function easeBezier(points, amount) {
     const [x1, y1, x2, y2] = points;
     const x = Math.max(0, Math.min(1, amount));
@@ -294,6 +306,19 @@ function lerpPose(from, to, amount) {
         x: from.x + (to.x - from.x) * amount,
         y: from.y + (to.y - from.y) * amount,
         scale: from.scale + (to.scale - from.scale) * amount,
+    };
+}
+
+// Invert lerpPose so a mid-flight retarget (tile recycled → exit right)
+// keeps the current pose at this amount and still lands on `to` at 1.
+function startPoseFor(current, to, amount) {
+    if (amount <= 0) return { ...current };
+    if (amount >= 1) return { ...to };
+    const inv = 1 - amount;
+    return {
+        x: (current.x - to.x * amount) / inv,
+        y: (current.y - to.y * amount) / inv,
+        scale: (current.scale - to.scale * amount) / inv,
     };
 }
 
@@ -540,6 +565,8 @@ function Clothing() {
         const introTimers = [];
         const introEntering = new Set();
         const startedRows = new Set();
+        const rowPending = new Set();
+        const rowEpoch = [];
         const rowAssignments = new Map();
         const libraryByKey = new Map(
             STREAM_LIBRARY.map((item) => [item.src || item.id, item])
@@ -595,12 +622,30 @@ function Clothing() {
         let lastTime = 0;
         let viewportWidth = 0;
         let itemHeight = 0;
+        let rowGapPx = 0;
+        let pageRowCount = 0;
+        let restFirstTop = 0;
         let baseSpeed = 0;
         let cancelled = false;
 
         const overlay = document.createElement('div');
         overlay.className = 'stream-overlay';
         overlay.hidden = true;
+
+        const headerEl = () =>
+            section.parentElement
+                ? section.parentElement.querySelector('.header-container')
+                : null;
+
+        const clipOverlayToHeader = () => {
+            const header = headerEl();
+            const top = header ? Math.ceil(header.getBoundingClientRect().bottom) : 0;
+            overlay.style.top = `${Math.max(0, top)}px`;
+        };
+
+        const resetOverlayClip = () => {
+            overlay.style.top = '';
+        };
 
         const makeFlyer = () => {
             const root = document.createElement('div');
@@ -697,34 +742,78 @@ function Clothing() {
 
         const opacityForSlot = (slot) => {
             if (!viewer) return null;
-            if (slot === viewer.slot) return viewer.thumbOpacity;
+            if (slot === viewer.slot && !viewer.tileGone) return viewer.thumbOpacity;
             const departing = viewer.departures.find((item) => item.slot === slot);
-            return departing ? departing.thumbOpacity : null;
+            return departing && !departing.tileGone ? departing.thumbOpacity : null;
         };
 
         let scrollLockY = null;
+        let scrollLockPad = '';
         const pageStartedAt = performance.now();
 
         let streamOriginX = 0;
         let streamOriginY = 0;
+        let viewOriginX = 0;
+        let viewOriginY = 0;
         const cacheStreamOrigin = () => {
             const rect = section.getBoundingClientRect();
-            streamOriginY = rect.top + pageScroll();
+            viewOriginX = rect.left;
+            viewOriginY = rect.top;
             streamOriginX = rect.left + (window.scrollX || window.pageXOffset || 0);
+            streamOriginY = rect.top + pageScroll();
         };
+        const applyHeaderRowGap = () => {
+            const header = headerEl();
+            if (!header) {
+                section.style.marginTop = '';
+                return;
+            }
+            const headerBox = header.getBoundingClientRect();
+            let chromeBottom = headerBox.top;
+            const logo = header.querySelector('.header-logo');
+            if (logo) {
+                chromeBottom = Math.max(chromeBottom, logo.getBoundingClientRect().bottom);
+            }
+            if (menuEl) {
+                chromeBottom = Math.max(chromeBottom, menuEl.getBoundingClientRect().bottom);
+            }
+            const margin = Math.round(chromeBottom + HEADER_TO_ROW_GAP_PX - headerBox.bottom);
+            section.style.marginTop = margin ? `${margin}px` : '';
+        };
+
+        const fitRowsToViewport = (firstTop) => {
+            const minGap = labelClearancePx(itemHeight);
+            const available = viewHeight() - firstTop - minGap;
+            if (!(itemHeight > 0) || available < itemHeight) {
+                return { gap: minGap, count: 1 };
+            }
+            const n = Math.max(
+                1,
+                Math.floor((available + minGap) / (itemHeight + minGap))
+            );
+            if (n <= 1) return { gap: minGap, count: 1 };
+            let gap = Math.round((available - n * itemHeight) / (n - 1));
+            gap = Math.max(minGap, gap);
+            const used = n * itemHeight + (n - 1) * gap;
+            if (used > available && gap > minGap) gap -= 1;
+            return { gap, count: n };
+        };
+
         const applyLayoutMetrics = () => {
             viewportWidth = section.clientWidth || window.innerWidth;
             itemHeight = clampItemHeight(window.innerWidth);
+            applyHeaderRowGap();
+            cacheStreamOrigin();
+            restFirstTop = Math.max(0, Math.round(streamOriginY));
+            const fitted = fitRowsToViewport(restFirstTop);
+            rowGapPx = fitted.gap;
+            pageRowCount = fitted.count;
             baseSpeed = itemHeight * ROW_SPEED_HEIGHTS_PER_SECOND;
             section.style.setProperty('--stream-item-height', `${itemHeight}px`);
-            section.style.setProperty(
-                '--stream-row-gap',
-                `${itemHeight * VERTICAL_GAP_RATIO}px`
-            );
-            cacheStreamOrigin();
+            section.style.setProperty('--stream-row-gap', `${rowGapPx}px`);
         };
 
-        const stridePx = () => itemHeight * (1 + VERTICAL_GAP_RATIO);
+        const stridePx = () => itemHeight + rowGapPx;
         const pageScroll = () =>
             scrollLockY == null ? window.scrollY || window.pageYOffset || 0 : scrollLockY;
         const viewHeight = () => {
@@ -734,18 +823,23 @@ function Clothing() {
         };
 
         const visibleBounds = () => {
-            const origin = section.offsetTop;
-            const viewTop = pageScroll();
-            const viewBottom = viewTop + viewHeight();
+            // Viewport coordinates of row 0 — not document Y + scroll. Mixing
+            // those after body scroll-lock was mounting the top-of-page rows
+            // while the user was looking further down.
+            cacheStreamOrigin();
+            const origin = viewOriginY;
+            const viewTop = 0;
+            const viewBottom = viewHeight();
             const stride = stridePx();
             if (!(stride > 0)) return { first: 0, last: 0 };
+            const extent = itemHeight + labelClearancePx(itemHeight);
             let first = null;
             let last = null;
             const start = Math.max(0, Math.floor((viewTop - origin) / stride) - 1);
             for (let index = start; index < start + 60; index += 1) {
                 const rowTop = origin + index * stride;
                 if (rowTop >= viewBottom) break;
-                if (rowTop + itemHeight > viewTop) {
+                if (rowTop + extent > viewTop) {
                     if (first == null) first = index;
                     last = index;
                 }
@@ -768,12 +862,17 @@ function Clothing() {
 
         const lockScroll = () => {
             if (scrollLockY != null) return;
+            // Measure before hiding overflow: once the scrollbar is gone the
+            // layout viewport gets wider and a centered header would jump.
+            const gutter = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
             scrollLockY = window.scrollY || window.pageYOffset || 0;
+            scrollLockPad = document.body.style.paddingRight;
             document.body.style.position = 'fixed';
             document.body.style.top = `-${scrollLockY}px`;
             document.body.style.left = '0';
             document.body.style.right = '0';
             document.body.style.width = '100%';
+            document.body.style.paddingRight = `${gutter}px`;
             document.documentElement.style.overflow = 'hidden';
             document.addEventListener('touchmove', blockTouchScroll, { passive: false });
         };
@@ -788,8 +887,11 @@ function Clothing() {
             document.body.style.left = '';
             document.body.style.right = '';
             document.body.style.width = '';
+            document.body.style.paddingRight = scrollLockPad;
+            scrollLockPad = '';
             document.documentElement.style.overflow = '';
             window.scrollTo(0, y);
+            cacheStreamOrigin();
         };
 
         const avgAspect = () => {
@@ -1149,14 +1251,17 @@ function Clothing() {
             for (let i = 0; i < pool.length; i += 1) {
                 const slot = pool[i];
                 if (slot.row !== rowIndex || slot === except) continue;
+                if (slot.el && rows[slot.row] && slot.el.parentNode !== rows[slot.row]) continue;
                 if (!leftmost || slot.x < leftmost.x) leftmost = slot;
             }
             return leftmost;
         };
 
-        const slotIsHeld = (slot) =>
-            !!viewer &&
-            (viewer.slot === slot || viewer.departures.some((departure) => departure.slot === slot));
+        const slotIsHeld = (slot) => {
+            if (!viewer) return false;
+            if (viewer.slot === slot && !viewer.tileGone) return true;
+            return viewer.departures.some((departure) => departure.slot === slot && !departure.tileGone);
+        };
 
         const displayedSpec = (slot) => {
             const image = slot.el && slot.el.querySelector('img');
@@ -1185,9 +1290,10 @@ function Clothing() {
 
         const recycle = (slot) => {
             if (slot.frozen) return;
-            if (slotIsHeld(slot)) {
-                wrapSlot(slot, slot.spec);
-                return;
+            if (viewer) {
+                if (viewer.slot === slot) viewer.tileGone = true;
+                const departing = viewer.departures.find((item) => item.slot === slot);
+                if (departing) departing.tileGone = true;
             }
             const spec = dealUniqueSpec(slot);
             if (spec) {
@@ -1403,13 +1509,86 @@ function Clothing() {
             pumpSmalls();
         };
 
-        const applyRows = (amount) => {
-            const frameTop = viewer ? viewer.frameTop : -1;
-            const frameBottom = viewer ? viewer.frameBottom : -1;
+        const rectsOverlap = (a, b) =>
+            a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+        const closeButtonBox = (layout) => {
+            const border = layout.border || 0;
+            const right = layout.endLeft + layout.inner.width + border;
+            const top = layout.endTop - border;
+            let closeX = right + CLOSE_BUTTON_GAP_PX;
+            let closeY = top;
+            if (closeX + CLOSE_BUTTON_PX > window.innerWidth - 8) {
+                closeX = Math.max(8, right - CLOSE_BUTTON_PX);
+                closeY = Math.max(8, top - CLOSE_BUTTON_PX - 4);
+            }
+            return {
+                left: closeX,
+                top: closeY,
+                right: closeX + CLOSE_BUTTON_PX,
+                bottom: closeY + CLOSE_BUTTON_PX,
+            };
+        };
+
+        const obstructionBoxes = (layout) => {
+            const border = layout.border || 0;
+            const boxes = [
+                {
+                    left: layout.endLeft - border,
+                    top: layout.endTop - border,
+                    right: layout.endLeft + layout.inner.width + border,
+                    bottom: layout.endTop + layout.inner.height + border,
+                },
+                closeButtonBox(layout),
+            ];
+            if (layout.panel) {
+                boxes.push({
+                    left: layout.panel.left,
+                    top: layout.panel.top,
+                    right: layout.panel.left + layout.panel.width,
+                    bottom: layout.panel.top + layout.panel.height,
+                });
+            }
+            return boxes;
+        };
+
+        const rowFadeBox = (index) => {
+            const top = viewOriginY + index * stridePx();
+            const outline = hoverOutlineEstimatePx();
+            const clearance = labelClearancePx(itemHeight);
+            const width = viewportWidth || window.innerWidth;
+            return {
+                left: viewOriginX,
+                top: top - outline,
+                right: viewOriginX + width,
+                bottom: top + itemHeight + clearance,
+            };
+        };
+
+        const hiddenRowsFor = (layout) => {
+            const hidden = new Set();
+            if (!layout) return hidden;
+            cacheStreamOrigin();
+            const boxes = obstructionBoxes(layout);
+            const viewH = viewHeight();
             rows.forEach((row, index) => {
                 if (!row) return;
-                const between = index > frameTop && index < frameBottom;
-                const targetOpacity = viewer && between ? 0 : 1;
+                const box = rowFadeBox(index);
+                if (box.bottom <= 0 || box.top >= viewH) return;
+                if (boxes.some((other) => rectsOverlap(box, other))) hidden.add(index);
+            });
+            return hidden;
+        };
+
+        const rowStaysVisible = (rowIndex) =>
+            !!viewer && !(viewer.hiddenRows && viewer.hiddenRows.has(rowIndex));
+
+        const applyRows = (amount) => {
+            const hidden = viewer && viewer.hiddenRows ? viewer.hiddenRows : null;
+            rows.forEach((row, index) => {
+                if (!row) return;
+                const stay = !hidden || !hidden.has(index);
+                const targetOpacity = viewer && !stay ? 0 : 1;
                 const opacity = 1 + (targetOpacity - 1) * amount;
                 const opacityStr = String(opacity);
                 if (row.dataset.opacity !== opacityStr) {
@@ -1424,37 +1603,16 @@ function Clothing() {
                         item.style.pointerEvents = blocked ? 'none' : '';
                     });
                 }
-                if (row.style.zIndex !== '') row.style.zIndex = '';
+                const z = viewer && stay ? '2' : '';
+                if (row.style.zIndex !== z) row.style.zIndex = z;
                 const pointerEvents = blocked ? 'none' : '';
                 if (row.style.pointerEvents !== pointerEvents) {
                     row.style.pointerEvents = pointerEvents;
                 }
+                if (row.style.transform) row.style.transform = '';
                 rowPose[index] = { ty: 0, scale: 1 };
             });
             section.classList.toggle('is-viewer-open', amount > 0.02);
-            if (menuEl) {
-                const menuOpacity = String(1 - amount);
-                if (menuEl.style.opacity !== menuOpacity) menuEl.style.opacity = menuOpacity;
-                const menuEvents = amount > 0.85 ? 'none' : '';
-                if (menuEl.style.pointerEvents !== menuEvents) {
-                    menuEl.style.pointerEvents = menuEvents;
-                }
-            }
-        };
-
-        const measureRows = () => {
-            const bases = [];
-            rows.forEach((row, index) => {
-                if (!row) return;
-                const rect = row.getBoundingClientRect();
-                bases[index] = {
-                    top: rect.top,
-                    left: rect.left,
-                    width: rect.width,
-                    height: rect.height,
-                };
-            });
-            return bases;
         };
 
         const viewerAspect = (spec, slot) => {
@@ -1509,64 +1667,23 @@ function Clothing() {
             };
         };
 
-        const layoutViewer = (spec, bases, slot) => {
+        const layoutViewer = (spec, slot) => {
             const aspect = viewerAspect(spec, slot);
             const reserve = bottomReservePx();
             const beside = panelBeside();
             const sideCost = beside ? panelWidthPx() + GALLERY_PANEL_GAP_PX : 0;
-            const topIndex = viewer ? viewer.frameTop : visibleBounds().first;
-            const bottomIndex = viewer ? viewer.frameBottom : visibleBounds().last;
-            const topRow = bases[topIndex] || bases.find(Boolean);
-            const bottomRow = bases[bottomIndex] || [...bases].reverse().find(Boolean);
-            if (!topRow || !bottomRow) {
-                const border = viewerBorderPx();
-                const maxTotalH = Math.max(80, viewHeight() - VIEWER_GAP_PX * 2 - reserve);
-                const maxTotalW = Math.max(
-                    80,
-                    window.innerWidth - VIEWER_GAP_PX * 2 - sideCost
-                );
-                const inner = fitInBox(
-                    aspect,
-                    Math.max(40, maxTotalW - border * 2),
-                    Math.max(40, maxTotalH - border * 2)
-                );
-                const totalW = inner.width + border * 2;
-                const totalH = inner.height + border * 2;
-                const groupLeft = Math.max(
-                    VIEWER_GAP_PX,
-                    (window.innerWidth - (totalW + sideCost)) / 2
-                );
-                const centerLeft = (window.innerWidth - inner.width) / 2;
-                const endLeft = beside ? groupLeft + sideCost + border : centerLeft;
-                const endTop = (viewHeight() - inner.height - reserve) / 2;
-                return {
-                    border,
-                    inner,
-                    totalW,
-                    totalH,
-                    endLeft,
-                    endTop,
-                    centerLeft,
-                    panel: panelGeometry({
-                        beside,
-                        groupLeft,
-                        border,
-                        inner,
-                        endLeft,
-                        endTop,
-                        bandBottom: viewHeight() - VIEWER_GAP_PX,
-                    }),
-                };
-            }
             const border = viewerBorderPx();
-            const gapTop = topRow.top + topRow.height + VIEWER_GAP_PX;
-            const gapBottom = bottomRow.top - VIEWER_GAP_PX;
-            const visibleTop = Math.max(gapTop, VIEWER_GAP_PX);
-            const visibleBottom = Math.min(gapBottom, viewHeight() - VIEWER_GAP_PX);
+            const firstTop = restFirstTop;
+            const count = Math.max(1, pageRowCount);
+            const lastTop = firstTop + (count - 1) * stridePx();
+            const topGap = Math.max(VIEWER_GAP_PX, labelClearancePx(itemHeight));
+            const bottomGap = VIEWER_GAP_PX;
+            const gapTop = firstTop + itemHeight + topGap;
+            const gapBottom = lastTop - bottomGap;
+            const visibleTop = Math.max(gapTop, topGap);
+            const visibleBottom = Math.min(gapBottom, viewHeight() - bottomGap);
             const betweenRows = visibleBottom - visibleTop;
             const room = viewHeight() - VIEWER_GAP_PX * 2;
-            // Anything that sits under the photo lives in the same band, so it
-            // comes off the height the photo and frame are allowed to use.
             const maxTotalH = Math.max(
                 80,
                 Math.min(room, betweenRows > 40 ? betweenRows : room) - reserve
@@ -1588,16 +1705,17 @@ function Clothing() {
             );
             const centerLeft = (window.innerWidth - inner.width) / 2;
             const endLeft = beside ? groupLeft + sideCost + border : centerLeft;
-            let endTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2 + border;
-            endTop = Math.max(
-                VIEWER_GAP_PX + border,
-                Math.min(
-                    endTop,
-                    viewHeight() - inner.height - VIEWER_GAP_PX - border - reserve
-                )
+            let standardEndTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2 + border;
+            const minEndTop = Math.ceil(
+                Math.max(VIEWER_GAP_PX, headerEl()?.getBoundingClientRect().bottom || 0)
+                + border
             );
+            const maxEndTop = Math.floor(
+                viewHeight() - inner.height - VIEWER_GAP_PX - border - reserve
+            );
+            standardEndTop = Math.max(minEndTop, Math.min(standardEndTop, maxEndTop));
 
-            return {
+            const buildLayout = (endTop) => ({
                 border,
                 inner,
                 totalW,
@@ -1605,6 +1723,7 @@ function Clothing() {
                 endLeft,
                 endTop,
                 centerLeft,
+                standardEndTop,
                 panel: panelGeometry({
                     beside,
                     groupLeft,
@@ -1612,9 +1731,86 @@ function Clothing() {
                     inner,
                     endLeft,
                     endTop,
-                    bandBottom: visibleBottom,
+                    bandBottom: viewHeight() - VIEWER_GAP_PX,
                 }),
+            });
+
+            cacheStreamOrigin();
+            const viewH = viewHeight();
+            const headerBottom = Math.ceil(headerEl()?.getBoundingClientRect().bottom || 0);
+            const minBoxTop = Math.max(VIEWER_GAP_PX, headerBottom);
+            const stride = stridePx();
+            const firstIndex = Math.max(0, Math.floor((0 - viewOriginY) / Math.max(1, stride)) - 2);
+            const fadeIndexes = [];
+            for (let index = firstIndex; index < firstIndex + 24; index += 1) {
+                fadeIndexes.push(index);
+            }
+
+            const layoutFits = (layout) =>
+                obstructionBoxes(layout).every(
+                    (box) =>
+                        box.top >= minBoxTop - 0.5
+                        && box.bottom <= viewH + 0.5
+                        && box.left >= -0.5
+                        && box.right <= window.innerWidth + 0.5
+                );
+
+            const countFades = (layout) => {
+                const boxes = obstructionBoxes(layout);
+                let n = 0;
+                for (let i = 0; i < fadeIndexes.length; i += 1) {
+                    const box = rowFadeBox(fadeIndexes[i]);
+                    if (box.bottom <= 0 || box.top >= viewH) continue;
+                    if (boxes.some((other) => rectsOverlap(box, other))) n += 1;
+                }
+                return n;
             };
+
+            const gapAboveRowBelow = (layout) => {
+                const frameBottom = layout.endTop + layout.inner.height + layout.border;
+                const boxes = obstructionBoxes(layout);
+                let nearest = Infinity;
+                for (let i = 0; i < fadeIndexes.length; i += 1) {
+                    const index = fadeIndexes[i];
+                    const top = viewOriginY + index * stride;
+                    if (top + itemHeight <= 0 || top >= viewH) continue;
+                    const box = rowFadeBox(index);
+                    if (boxes.some((other) => rectsOverlap(box, other))) continue;
+                    if (top >= frameBottom - 0.5 && top < nearest) nearest = top;
+                }
+                return nearest - frameBottom;
+            };
+
+            // Same size as the top-of-page photo; only the vertical position
+            // may move, so it sits in the row gaps and fades as few rows as
+            // possible. Prefer a normal gap above the row below, then the
+            // standard (top-of-page) position.
+            let bestY = standardEndTop;
+            let bestFades = Infinity;
+            let bestComfort = -1;
+            let bestDist = Infinity;
+            const consider = (y) => {
+                if (y < minEndTop || y > maxEndTop) return;
+                const layout = buildLayout(y);
+                if (!layoutFits(layout)) return;
+                const fades = countFades(layout);
+                const comfort = gapAboveRowBelow(layout) >= VIEWER_GAP_PX - 0.5 ? 1 : 0;
+                const dist = Math.abs(y - standardEndTop);
+                if (
+                    fades < bestFades
+                    || (fades === bestFades && comfort > bestComfort)
+                    || (fades === bestFades && comfort === bestComfort && dist < bestDist)
+                ) {
+                    bestY = y;
+                    bestFades = fades;
+                    bestComfort = comfort;
+                    bestDist = dist;
+                }
+            };
+            consider(standardEndTop);
+            for (let y = minEndTop; y <= maxEndTop; y += 1) consider(y);
+
+            return buildLayout(bestY);
         };
 
         // Step A grows the photo to the centre; the slide across to the panel
@@ -1647,14 +1843,46 @@ function Clothing() {
             const scale = slot.scale || 1;
             const width = slot.width * scale;
             const height = itemHeight * scale;
-            const originX = streamOriginX - (window.scrollX || window.pageXOffset || 0);
-            const originY = streamOriginY - pageScroll();
             return {
-                left: originX + slot.x + (slot.width - width) / 2,
-                top: originY + slot.row * stridePx() + (itemHeight - height) / 2,
+                left: viewOriginX + slot.x + (slot.width - width) / 2,
+                top: viewOriginY + slot.row * stridePx() + (itemHeight - height) / 2,
                 width,
                 height,
             };
+        };
+
+        const thumbOnScreen = (thumb) =>
+            !!thumb && thumb.left < window.innerWidth && thumb.left + thumb.width > 0;
+
+        const exitRightPose = (layout, thumb, rowIndex) => {
+            const width = thumb?.width || itemHeight;
+            const height = thumb?.height || itemHeight;
+            const scale = width / Math.max(1, layout.inner.width);
+            const top = viewOriginY + rowIndex * stridePx()
+                + (itemHeight - height) / 2;
+            return {
+                x: window.innerWidth,
+                y: top,
+                scale,
+            };
+        };
+
+        const closeTargetFor = (slot, layout, tileGone, homeWidth) => {
+            const thumb = slot ? liveThumb(slot) : null;
+            if (tileGone || !thumbOnScreen(thumb)) {
+                return {
+                    exitRight: true,
+                    pose: exitRightPose(
+                        layout,
+                        {
+                            width: homeWidth || thumb?.width || itemHeight,
+                            height: itemHeight,
+                        },
+                        slot ? slot.row : 0
+                    ),
+                };
+            }
+            return { exitRight: false, pose: poseFromThumb(thumb, layout) };
         };
 
         const placeNode = (node, pose) => {
@@ -2082,6 +2310,8 @@ function Clothing() {
             releaseFlyer(flyer);
             activeFlyer = homeFlyer;
             unlockScroll();
+            repairVisibleRows();
+            resetOverlayClip();
             overlay.hidden = true;
             closeBtn.hidden = true;
             caption.style.opacity = '0';
@@ -2111,10 +2341,14 @@ function Clothing() {
             viewer.departures = viewer.departures.filter((dep) => {
                 const raw = Math.min(1, (now - dep.t0) / duration);
                 const amount = easeClose(raw);
-                const live = poseFromThumb(liveThumb(dep.slot), dep.layout);
+                const next = closeTargetFor(dep.slot, dep.layout, dep.tileGone, dep.homeThumbWidth);
+                if (next.exitRight && !dep.tileGone) {
+                    dep.from = startPoseFor(dep.pose, next.pose, amount);
+                    dep.tileGone = true;
+                }
                 const pose = reducedMotion
                     ? dep.from
-                    : lerpPose(dep.from, live, amount);
+                    : lerpPose(dep.from, next.pose, amount);
                 dep.pose = pose;
                 dep.thumbOpacity = 0;
                 dep.frameOpacity = frameOpacityFor('closing', amount);
@@ -2191,7 +2425,6 @@ function Clothing() {
                         viewer.slideT0 = now;
                     } else {
                         viewer.phase = 'open';
-                        activeFlyer.root.style.willChange = 'auto';
                         closeBtn.style.willChange = 'auto';
                     }
                 }
@@ -2206,7 +2439,6 @@ function Clothing() {
                 syncLargeFade(now);
                 if (raw >= 1) {
                     viewer.phase = 'open';
-                    activeFlyer.root.style.willChange = 'auto';
                     closeBtn.style.willChange = 'auto';
                 }
             } else if (viewer.phase === 'open') {
@@ -2221,7 +2453,20 @@ function Clothing() {
                 viewer.thumbOpacity = 0;
                 viewer.frameOpacity = reducedMotion ? 1 - amount : frameOpacityFor('closing', amount);
                 viewer.closeDone = raw >= 1;
-                const live = poseFromThumb(liveThumb(viewer.slot), viewer.layout);
+                if (!viewer.closeExitRight) {
+                    const next = closeTargetFor(
+                        viewer.slot,
+                        viewer.layout,
+                        viewer.tileGone,
+                        viewer.homeThumbWidth
+                    );
+                    if (next.exitRight) {
+                        viewer.closeFrom = startPoseFor(viewer.pose, next.pose, amount);
+                        viewer.closeExitRight = true;
+                    }
+                    viewer.closeTo = next.pose;
+                }
+                const live = viewer.closeTo;
                 const pose = reducedMotion ? viewer.closeFrom : lerpPose(viewer.closeFrom, live, amount);
                 if (reducedMotion) activeFlyer.root.style.opacity = String(1 - amount);
                 placeOverlay(pose, viewer.layout);
@@ -2235,8 +2480,12 @@ function Clothing() {
             syncPanel();
 
             if (viewer.phase === 'closing' && viewer.closeDone) {
-                const live = poseFromThumb(liveThumb(viewer.slot), viewer.layout);
-                if (!reducedMotion) placeOverlay(live, viewer.layout);
+                if (!viewer.closeExitRight && !reducedMotion) {
+                    placeOverlay(
+                        poseFromThumb(liveThumb(viewer.slot), viewer.layout),
+                        viewer.layout
+                    );
+                }
                 viewer.thumbOpacity = 1;
                 revealSlot(viewer.slot);
                 activeFlyer.root.hidden = true;
@@ -2251,9 +2500,7 @@ function Clothing() {
             const now = performance.now();
             lockScroll();
             cacheStreamOrigin();
-            const frames = visibleBounds();
-            const bases = measureRows();
-            const layout = layoutViewer(spec, bases, slot);
+            const layout = layoutViewer(spec, slot);
             const from = poseFromThumb(liveThumb(slot), layout);
             const to = { x: layout.endLeft, y: layout.endTop, scale: 1 };
             const opening = openTargetFor(layout);
@@ -2273,9 +2520,10 @@ function Clothing() {
                 slideT0: 0,
                 pose: from,
                 layout,
-                rowBases: bases,
-                frameTop: frames.first,
-                frameBottom: frames.last,
+                hiddenRows: hiddenRowsFor(layout),
+                tileGone: false,
+                closeExitRight: false,
+                homeThumbWidth: slot.width,
                 rowMotion: 'in',
                 rowT0: now,
                 rowAmount: 0,
@@ -2310,6 +2558,7 @@ function Clothing() {
             hidePanelInstantly();
             setPanelText(spec);
             placePanel(layout);
+            clipOverlayToHeader();
             overlay.hidden = false;
             closeBtn.hidden = false;
             closeBtn.style.opacity = '0';
@@ -2329,8 +2578,7 @@ function Clothing() {
             closeBtn.focus({ preventScroll: true });
         };
 
-        const isFramingRow = (rowIndex) =>
-            !!viewer && (rowIndex === viewer.frameTop || rowIndex === viewer.frameBottom);
+        const isFramingRow = (rowIndex) => rowStaysVisible(rowIndex);
 
         const switchTo = (slot) => {
             if (!viewer || viewer.phase === 'closing' || slot === viewer.slot) return;
@@ -2352,7 +2600,7 @@ function Clothing() {
             } else {
                 spec = displayedSpec(slot);
                 if (!spec) return;
-                layout = layoutViewer(spec, viewer.rowBases, slot);
+                layout = layoutViewer(spec, slot);
                 node = trackFlyer(makeFlyer());
                 from = poseFromThumb(liveThumb(slot), layout);
                 configureFlyer(node, layout, spec);
@@ -2370,6 +2618,8 @@ function Clothing() {
                 t0: now,
                 thumbOpacity: 0,
                 frameOpacity: viewer.frameOpacity || 1,
+                tileGone: !!viewer.tileGone,
+                homeThumbWidth: viewer.homeThumbWidth,
             });
             activeFlyer = node;
             node.root.style.willChange = 'transform';
@@ -2378,6 +2628,9 @@ function Clothing() {
             viewer.slot = slot;
             viewer.spec = spec;
             viewer.shownKey = photoKey(spec);
+            viewer.tileGone = false;
+            viewer.closeExitRight = false;
+            viewer.homeThumbWidth = slot.width;
             viewer.phase = 'switching';
             viewer.t0 = now;
             viewer.from = from;
@@ -2388,6 +2641,8 @@ function Clothing() {
             viewer.slideT0 = 0;
             viewer.pose = from;
             viewer.layout = layout;
+            viewer.hiddenRows = hiddenRowsFor(layout);
+            applyRows(viewer.rowAmount || 1);
             viewer.thumbOpacity = 0;
             viewer.frameOpacity = 0;
             viewer.progress = 0;
@@ -2423,15 +2678,21 @@ function Clothing() {
             if (!viewer || viewer.phase === 'closing') return;
             const now = performance.now();
             const duration = Math.max(1, viewer.duration);
-            const opened = viewer.phase === 'open' ? 1 : Math.min(1, viewer.progress || 0);
             viewer.phase = 'closing';
+            viewer.settled = false;
             viewer.rowMotion = 'out';
             viewer.rowT0 = now;
             viewer.closeFrom = viewer.pose;
             viewer.closeT0 = now;
-            viewer.closeDuration = reducedMotion
-                ? duration
-                : Math.max(220, duration * Math.max(0.35, opened));
+            viewer.closeDuration = duration;
+            const closingTo = closeTargetFor(
+                viewer.slot,
+                viewer.layout,
+                viewer.tileGone,
+                viewer.homeThumbWidth
+            );
+            viewer.closeExitRight = closingTo.exitRight;
+            viewer.closeTo = closingTo.pose;
             viewer.closeDone = false;
             viewer.thumbOpacity = 0;
             caption.style.opacity = '0';
@@ -2513,10 +2774,30 @@ function Clothing() {
             });
         };
 
+        const slotIsLive = (slot) =>
+            !!(
+                slot
+                && slot.el
+                && rows[slot.row]
+                && slot.el.parentNode === rows[slot.row]
+            );
+
+        const purgeDeadSlots = (rowIndex) => {
+            for (let i = pool.length - 1; i >= 0; i -= 1) {
+                const slot = pool[i];
+                if (rowIndex != null && slot.row !== rowIndex) continue;
+                if (slotIsLive(slot)) continue;
+                releaseReserved(slot.spec);
+                pool.splice(i, 1);
+            }
+        };
+
         const populateRow = (rowIndex, specs, mode) => {
             const rowEl = rows[rowIndex];
             if (!rowEl) return;
+            purgeDeadSlots(rowIndex);
             rowEl.replaceChildren();
+            purgeDeadSlots(rowIndex);
 
             const slots = specs.map((spec, i) => {
                 const el = document.createElement('div');
@@ -2530,7 +2811,7 @@ function Clothing() {
                     aspectRatio: 1,
                     speed: 0,
                     scale: 1,
-                    frozen: false,
+                    frozen: holdMotion,
                     swayPhase: hash01(rowIndex * 50 + i) * Math.PI * 2,
                 };
                 bindItem(slot);
@@ -2569,7 +2850,9 @@ function Clothing() {
         };
 
         const packRow = (rowIndex, fromRight) => {
-            const mine = pool.filter((slot) => slot.row === rowIndex).sort((a, b) => a.x - b.x);
+            const mine = pool
+                .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
+                .sort((a, b) => a.x - b.x);
             const packFromRight = fromRight === undefined ? introEntering.has(rowIndex) : fromRight;
             if (packFromRight) {
                 for (let i = mine.length - 2; i >= 0; i -= 1) {
@@ -2585,19 +2868,25 @@ function Clothing() {
         };
 
         const rowNeedsCoverage = (rowIndex, mode) => {
-            const mine = pool.filter((slot) => slot.row === rowIndex);
+            const mine = pool
+                .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
+                .sort((a, b) => a.x - b.x);
             if (!mine.length) return true;
             let left = mine[0];
-            let right = mine[0];
-            mine.forEach((slot) => {
-                if (slot.x < left.x) left = slot;
-                if (slot.x + slot.width > right.x + right.width) right = slot;
-            });
+            let right = mine[mine.length - 1];
             const needed = viewportWidth + left.width + right.width;
             const span = right.x + right.width - left.x;
             if (span < needed) return true;
             if (mode === 'enter-left') return false;
             return left.x > -left.width || right.x + right.width < viewportWidth + right.width;
+        };
+
+        const isRealGap = (gap, widthA, widthB) => {
+            const tile = Math.min(
+                widthA > 0 ? widthA : itemHeight,
+                widthB > 0 ? widthB : itemHeight
+            );
+            return gap > ITEM_GAP_PX + tile * 0.5;
         };
 
         const appendSlotToRow = (rowIndex, spec, side) => {
@@ -2622,7 +2911,7 @@ function Clothing() {
             applyVisuals(slot, spec);
             slot.speed = speedFor(slot.id);
             applyDepth(slot);
-            const mine = pool.filter((entry) => entry.row === rowIndex);
+            const mine = pool.filter((entry) => entry.row === rowIndex && slotIsLive(entry));
             if (side === 'left') {
                 const left = mine.reduce((best, entry) => (!best || entry.x < best.x ? entry : best), null);
                 slot.x = left ? left.x - slot.width - ITEM_GAP_PX : -slot.width;
@@ -2640,7 +2929,69 @@ function Clothing() {
             return slot;
         };
 
+        const insertSlotAt = (rowIndex, spec, x) => {
+            const slot = appendSlotToRow(rowIndex, spec, 'right');
+            if (!slot) return null;
+            slot.x = x;
+            paint(slot);
+            return slot;
+        };
+
+        const shiftSlotsFrom = (rowIndex, minX, delta) => {
+            if (!delta) return;
+            pool.forEach((slot) => {
+                if (slot.row !== rowIndex || !slotIsLive(slot)) return;
+                if (slot.x < minX - 0.5) return;
+                slot.x += delta;
+                paint(slot);
+            });
+        };
+
+        const fillRealGap = (rowIndex, leftX, rightX, leftWidth, rightWidth, grow) => {
+            let added = 0;
+            let left = leftX;
+            let right = rightX;
+            for (let n = 0; n < 80; n += 1) {
+                if (!isRealGap(right - left, leftWidth, rightWidth)) return added;
+                const spec = dealUniqueSpec();
+                const width = spec
+                    ? itemHeight * (spec.aspectRatio || aspectFor(spec) || 1)
+                    : 0;
+                const x = grow === 'left'
+                    ? right - ITEM_GAP_PX - width
+                    : left + ITEM_GAP_PX;
+                const fits = spec && (
+                    grow === 'left'
+                        ? x >= left + ITEM_GAP_PX - 0.5
+                        : x + width + ITEM_GAP_PX <= right + 0.5
+                );
+                if (!fits) {
+                    if (spec) releaseReserved(spec);
+                    if (grow !== 'left') {
+                        const close = right - left - ITEM_GAP_PX;
+                        if (close > 0.5) shiftSlotsFrom(rowIndex, right, -close);
+                    }
+                    return added;
+                }
+                const slot = insertSlotAt(rowIndex, spec, x);
+                if (!slot) return added;
+                if (!slotHasLoadedPhoto(slot)) {
+                    decodeOntoSlot(slot, libraryByKey.get(photoKey(spec)) || spec);
+                }
+                if (grow === 'left') {
+                    right = slot.x;
+                    rightWidth = slot.width;
+                } else {
+                    left = slot.x + slot.width;
+                    leftWidth = slot.width;
+                }
+                added += 1;
+            }
+            return added;
+        };
+
         const fillRowToCover = async (rowIndex, mode) => {
+            purgeDeadSlots(rowIndex);
             for (let n = 0; n < 80 && rowNeedsCoverage(rowIndex, mode); n += 1) {
                 const spec = dealUniqueSpec();
                 if (!spec) break;
@@ -2656,7 +3007,6 @@ function Clothing() {
                     decodeOntoSlot(slot, libraryByKey.get(photoKey(spec)) || spec);
                 }
             }
-            packRow(rowIndex, mode === 'enter-left');
         };
 
         const assignRowPhotos = (rowIndex) => {
@@ -2679,20 +3029,24 @@ function Clothing() {
         let holdMotion = false;
         const startRow = (rowIndex, mode) => {
             const rowEl = rows[rowIndex];
-            if (cancelled || startedRows.has(rowIndex) || !rowEl) return Promise.resolve();
+            if (cancelled || !rowEl) return Promise.resolve();
+            rowEpoch[rowIndex] = (rowEpoch[rowIndex] || 0) + 1;
+            const epoch = rowEpoch[rowIndex];
             startedRows.add(rowIndex);
+            rowPending.add(rowIndex);
             introPlan.delete(rowIndex);
             const raws = assignRowPhotos(rowIndex);
-            const stillHere = () => !cancelled && rows[rowIndex] === rowEl && rowEl.isConnected;
+            const stillHere = () =>
+                !cancelled
+                && rowEpoch[rowIndex] === epoch
+                && rows[rowIndex] === rowEl
+                && rowEl.isConnected;
             const abortStart = () => {
                 raws.forEach(releaseReserved);
-                if (rows[rowIndex] === rowEl) {
-                    startedRows.delete(rowIndex);
-                    introEntering.delete(rowIndex);
-                } else if (!rows[rowIndex]) {
-                    startedRows.delete(rowIndex);
-                    introEntering.delete(rowIndex);
-                }
+                if (rowEpoch[rowIndex] !== epoch) return;
+                startedRows.delete(rowIndex);
+                rowPending.delete(rowIndex);
+                introEntering.delete(rowIndex);
             };
             const job = (async () => {
                 const decoded = await mapWithConcurrency(raws, DECODE_CONCURRENCY, decodeSmall);
@@ -2724,6 +3078,7 @@ function Clothing() {
                 if (mode !== 'enter-left') rowEl.style.visibility = 'hidden';
                 populateRow(rowIndex, specs, mode);
                 await fillRowToCover(rowIndex, mode);
+                packRow(rowIndex, mode === 'enter-left');
                 if (!stillHere()) {
                     abortStart();
                     return;
@@ -2752,6 +3107,9 @@ function Clothing() {
                 scheduleUpcoming();
                 syncPlayback();
             })();
+            job.finally(() => {
+                if (rowEpoch[rowIndex] === epoch) rowPending.delete(rowIndex);
+            });
             if (bootPromises) bootPromises.push({ index: rowIndex, job });
             return job;
         };
@@ -2807,9 +3165,13 @@ function Clothing() {
             }
             releaseRow(rowEl);
             rows[index] = null;
+            rowEpoch[index] = (rowEpoch[index] || 0) + 1;
             startedRows.delete(index);
+            rowPending.delete(index);
             introPlan.delete(index);
             introEntering.delete(index);
+            const assigned = rowAssignments.get(index);
+            if (assigned) assigned.forEach(releaseReserved);
             rowAssignments.delete(index);
         };
 
@@ -2823,7 +3185,11 @@ function Clothing() {
                 rowPose[index] = { ty: 0, scale: 1 };
             }
             placeRow(index);
-            if (startedRows.has(index) || introPlan.has(index)) return;
+            const live = pool.some((slot) => slot.row === index && slotIsLive(slot));
+            if (startedRows.has(index) && live) return;
+            if (rowPending.has(index)) return;
+            if (introPlan.has(index) && pageScroll() < 8) return;
+            if (introPlan.has(index)) introPlan.delete(index);
             startRow(index, 'filled');
         };
 
@@ -2851,7 +3217,121 @@ function Clothing() {
                 if (!rows[index]) continue;
                 if (index < from || index > to) removeRow(index);
             }
-            for (let index = from; index <= to; index += 1) placeRow(index);
+            const keep = new Set();
+            pool.forEach((slot) => {
+                const key = photoKey(slot.spec);
+                if (key) keep.add(key);
+            });
+            rowAssignments.forEach((raws) => {
+                raws.forEach((item) => {
+                    const key = photoKey(item);
+                    if (key) keep.add(key);
+                });
+            });
+            [...reserved].forEach((key) => {
+                if (!keep.has(key)) reserved.delete(key);
+            });
+            repairVisibleRows(from, to);
+        };
+
+        const introProtect = (index) => introPlan.has(index) && pageScroll() < 8;
+
+        const rowLooksInvisible = (rowEl) => {
+            if (!rowEl) return true;
+            return (
+                rowEl.style.visibility === 'hidden'
+                || rowEl.style.opacity === '0'
+                || rowEl.dataset.opacity === '0'
+            );
+        };
+
+        const warnRowRepair = (index, issue, extra) => {
+            if (process.env.NODE_ENV === 'production') return;
+            console.warn('[clothing] repaired row', {
+                row: index,
+                issue,
+                introWaiting: introPlan.has(index),
+                entering: introEntering.has(index),
+                started: startedRows.has(index),
+                scroll: Math.round(pageScroll()),
+                ...extra,
+            });
+        };
+
+        const repairVisibleRows = (from, to) => {
+            if (cancelled) return;
+            if (from == null || to == null) {
+                const bounds = visibleBounds();
+                const buffer =
+                    window.innerWidth <= MOBILE_BREAKPOINT_PX ? MOBILE_ROW_BUFFER : ROW_BUFFER;
+                from = Math.max(0, bounds.first - buffer);
+                to = bounds.last + buffer;
+            }
+            purgeDeadSlots();
+            if (!holdMotion) {
+                pool.forEach((slot) => {
+                    if (slot.frozen) slot.frozen = false;
+                });
+            }
+            for (let index = from; index <= to; index += 1) {
+                if (introProtect(index)) continue;
+                if (!rows[index]) {
+                    warnRowRepair(index, 'missing');
+                    ensureRow(index);
+                    continue;
+                }
+                const rowEl = rows[index];
+                if (!viewer && !rowPending.has(index) && rowLooksInvisible(rowEl)) {
+                    warnRowRepair(index, 'invisible', {
+                        opacity: rowEl.style.opacity || rowEl.dataset.opacity || '',
+                        visibility: rowEl.style.visibility || '',
+                    });
+                    rowEl.style.opacity = '';
+                    rowEl.style.visibility = '';
+                    rowEl.removeAttribute('data-opacity');
+                    rowEl.removeAttribute('data-blocked');
+                    rowEl.style.pointerEvents = '';
+                }
+                if (introEntering.has(index) && !rowIsEnteringFromLeft(index)) {
+                    introEntering.delete(index);
+                }
+                if (introEntering.has(index)) continue;
+                const live = pool
+                    .filter((slot) => slot.row === index && slotIsLive(slot))
+                    .sort((a, b) => a.x - b.x);
+                if (!live.length) {
+                    if (rowPending.has(index)) continue;
+                    warnRowRepair(index, 'empty', {
+                        detached: pool.filter((slot) => slot.row === index).length,
+                    });
+                    startRow(index, 'filled');
+                    continue;
+                }
+                const first = live[0];
+                const last = live[live.length - 1];
+                let added = fillRealGap(index, 0, first.x, first.width, first.width, 'left');
+                for (let i = 1; i < live.length; i += 1) {
+                    const prev = live[i - 1];
+                    const next = live[i];
+                    added += fillRealGap(
+                        index,
+                        prev.x + prev.width,
+                        next.x,
+                        prev.width,
+                        next.width,
+                        'right'
+                    );
+                }
+                added += fillRealGap(
+                    index,
+                    last.x + last.width,
+                    viewportWidth,
+                    last.width,
+                    last.width,
+                    'right'
+                );
+                if (added) warnRowRepair(index, 'gap', { added });
+            }
         };
 
         const scheduleIntroRow = (index, at) => {
@@ -2873,26 +3353,12 @@ function Clothing() {
         const outlineFor = (slot) => {
             if (!slot?.spec || !(slot.width > 0)) return 0;
             const border = viewerBorderPx();
-            const bases = [];
-            const top = streamOriginY - pageScroll();
-            const stride = stridePx();
-            for (let index = 0; index < rows.length; index += 1) {
-                if (!rows[index]) continue;
-                bases[index] = {
-                    top: top + index * stride,
-                    left: streamOriginX,
-                    width: viewportWidth,
-                    height: itemHeight,
-                };
-            }
-            const innerWidth = layoutViewer(slot.spec, bases, slot).inner.width;
+            const innerWidth = layoutViewer(slot.spec, slot).inner.width;
             if (!(innerWidth > 0)) return 0;
             return Math.max(1, Math.round((border / innerWidth) * slot.width));
         };
 
         const slotUnderPointer = () => {
-            const originY = streamOriginY - pageScroll();
-            const originX = streamOriginX - (window.scrollX || window.pageXOffset || 0);
             const stride = stridePx();
             for (let i = pool.length - 1; i >= 0; i -= 1) {
                 const slot = pool[i];
@@ -2900,12 +3366,13 @@ function Clothing() {
                 if (!slotHasLoadedPhoto(slot)) continue;
                 if (slot.el.style.pointerEvents === 'none') continue;
                 if (slot.el.style.opacity === '0' || slot.paintedOpacity === 0) continue;
-                if (viewer && (!isFramingRow(slot.row) || slot === viewer.slot)) continue;
+                if (viewer && (!rowStaysVisible(slot.row) || slot === viewer.slot)) continue;
                 const scale = slot.scale || 1;
                 const width = slot.width * scale;
                 const height = itemHeight * scale;
-                const left = originX + slot.x + (slot.width - width) / 2;
-                const top = originY + slot.row * stride + (itemHeight - height) / 2;
+                const left = viewOriginX + slot.x + (slot.width - width) / 2;
+                const top = viewOriginY
+                    + slot.row * stride + (itemHeight - height) / 2;
                 if (
                     pointerX >= left
                     && pointerX < left + width
@@ -2953,6 +3420,10 @@ function Clothing() {
             if (slot.labelShift === shift) return;
             slot.labelShift = shift;
             label.style.left = shift ? `${shift}px` : '';
+            if (slot.labelAbove) {
+                slot.labelAbove = false;
+                label.classList.remove('is-label-above');
+            }
         };
 
         // Written when the hover starts, so a recycled tile can never show the
@@ -2964,8 +3435,10 @@ function Clothing() {
             slot.labelTitleEl.textContent = info ? info.title : '';
             slot.labelYearEl.textContent = info && info.year ? `, ${info.year}` : '';
             slot.labelWidth = info ? label.offsetWidth : 0;
+            slot.labelHeight = info ? label.offsetHeight : 0;
             slot.labelPastEdge = null;
             slot.labelShift = null;
+            slot.labelAbove = null;
             alignLabel(slot);
         };
 
@@ -3012,7 +3485,7 @@ function Clothing() {
         }
 
         const warnEmptyVisibleTiles = () => {
-            const originY = streamOriginY - pageScroll();
+            const originY = viewOriginY;
             const stride = stridePx();
             const viewTop = 0;
             const viewBottom = viewHeight();
@@ -3043,6 +3516,8 @@ function Clothing() {
             if (!running) return;
             const dt = lastTime ? Math.min(MAX_FRAME_SECONDS, (now - lastTime) / 1000) : 0;
             lastTime = now;
+            cacheStreamOrigin();
+            purgeDeadSlots();
 
             const motionScale = reducedMotion ? REDUCED_MOTION_SPEED_SCALE : 1;
             if (motionScale > 0 && dt > 0) {
@@ -3208,8 +3683,8 @@ function Clothing() {
                 if (cancelled || scrollLockY != null) return;
                 pumpSmalls();
                 const { first, last } = visibleBounds();
-                if (`${first}:${last}` === mountedKey) return;
-                mountRange();
+                if (`${first}:${last}` !== mountedKey) mountRange();
+                else repairVisibleRows();
             });
         };
         window.addEventListener('scroll', onScroll, { passive: true });
@@ -3221,22 +3696,6 @@ function Clothing() {
             resizeFrame = requestAnimationFrame(() => {
                 resizeFrame = 0;
                 if (cancelled || pageIsZoomed()) return;
-                if (viewer) {
-                    viewer.rowBases = measureRows();
-                    viewer.layout = layoutViewer(viewer.spec, viewer.rowBases, viewer.slot);
-                    viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
-                    const resized = openTargetFor(viewer.layout);
-                    viewer.openTo = resized.pose;
-                    if (viewer.phase !== 'sliding') viewer.needsSlide = resized.slide;
-                    if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
-                    placeCaption(viewer.layout);
-                    placePanel(viewer.layout);
-                    cacheStreamOrigin();
-                    if (fineHover && hoverSlot) {
-                        hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
-                    }
-                    return;
-                }
                 const previousHeight = itemHeight;
                 applyLayoutMetrics();
                 allocatedRows = 0;
@@ -3264,6 +3723,20 @@ function Clothing() {
                     fillRowToCover(index, entering.has(index) ? 'enter-left' : 'filled')
                 );
                 mountRange();
+                if (viewer) {
+                    clipOverlayToHeader();
+                    viewer.layout = layoutViewer(viewer.spec, viewer.slot);
+                    viewer.hiddenRows = hiddenRowsFor(viewer.layout);
+                    viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
+                    const resized = openTargetFor(viewer.layout);
+                    viewer.openTo = resized.pose;
+                    if (viewer.phase !== 'sliding') viewer.needsSlide = resized.slide;
+                    if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
+                    placeCaption(viewer.layout);
+                    placePanel(viewer.layout);
+                    applyRows(viewer.rowMotion === 'hold' ? 1 : (viewer.rowAmount || 0));
+                    viewer.settled = false;
+                }
                 if (fineHover && hoverSlot) {
                     hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
                     syncLabel(hoverSlot);
@@ -3277,8 +3750,14 @@ function Clothing() {
             window.visualViewport.addEventListener('scroll', onScroll);
         }
 
+        const repairTimer = window.setInterval(() => {
+            if (cancelled || scrollLockY != null) return;
+            repairVisibleRows();
+        }, 500);
+
         return () => {
             cancelled = true;
+            window.clearInterval(repairTimer);
             clearIntroTimers();
             pause();
             intersection.disconnect();

@@ -7,11 +7,12 @@
 
 .clothing-container .header-container {
     position: relative;
-    z-index: 6;
+    z-index: 200;
     flex: 0 0 auto;
     align-items: center;
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: 0;
+    pointer-events: auto;
 }
 
 .clothing-container .header-nav {
@@ -24,10 +25,11 @@
 
 .floating-streams {
     --stream-item-height: clamp(70px, 10vw, 120px);
-    --stream-row-gap: calc(var(--stream-item-height) * 0.5);
+    --stream-row-gap: 37px;
     --stream-open-ms: 700ms;
     --stream-open-ease: cubic-bezier(0.22, 1, 0.36, 1);
     position: relative;
+    z-index: 0;
     width: 100%;
     max-width: 100%;
     overflow: visible;
@@ -127,7 +129,8 @@
     opacity: 1;
 }
 
-.floating-streams.is-viewer-open .stream-label {
+.floating-streams-row[data-blocked="1"] .stream-label,
+.floating-streams-row[data-blocked="1"] .stream-item.is-hovered .stream-label {
     opacity: 0;
 }
 
