@@ -64,7 +64,8 @@ const INTRO_STORAGE_KEY = 'clothing-intro-played';
 // Used only if sessionStorage is unavailable.
 let introPlayedThisVisit = false;
 
-const MAX_FRAME_SECONDS = 0.1;
+// One slow frame (close cleanup, decode, etc.) must not leap the rows.
+const MAX_FRAME_SECONDS = 1 / 32;
 
 // Future: each item's speed = baseSpeed * (1 ± this). 0.25 => about ±25%.
 const SPEED_VARIATION = 0;
@@ -749,6 +750,19 @@ function Clothing() {
 
         let scrollLockY = null;
         let scrollLockPad = '';
+        let suppressScroll = false;
+        let postCloseFrame = 0;
+        let quietRows = new Set();
+        let quietRowsUntil = 0;
+        let deferredFlyers = [];
+        const rowLayoutQuiet = (rowIndex) => {
+            if (rowIndex == null || rowIndex < 0) return false;
+            if (viewer) {
+                if (viewer.homeRow === rowIndex) return true;
+                if (viewer.departures?.some((dep) => dep.homeRow === rowIndex)) return true;
+            }
+            return quietRows.has(rowIndex) && performance.now() < quietRowsUntil;
+        };
         const pageStartedAt = performance.now();
 
         let streamOriginX = 0;
@@ -875,13 +889,14 @@ function Clothing() {
             document.body.style.paddingRight = `${gutter}px`;
             document.documentElement.style.overflow = 'hidden';
             document.addEventListener('touchmove', blockTouchScroll, { passive: false });
+            cacheStreamOrigin();
         };
 
         const unlockScroll = () => {
             document.removeEventListener('touchmove', blockTouchScroll);
             if (scrollLockY == null) return;
             const y = scrollLockY;
-            scrollLockY = null;
+            suppressScroll = true;
             document.body.style.position = '';
             document.body.style.top = '';
             document.body.style.left = '';
@@ -890,8 +905,15 @@ function Clothing() {
             document.body.style.paddingRight = scrollLockPad;
             scrollLockPad = '';
             document.documentElement.style.overflow = '';
+            document.documentElement.scrollTop = y;
+            document.body.scrollTop = y;
             window.scrollTo(0, y);
+            scrollLockY = null;
             cacheStreamOrigin();
+            lastTime = performance.now();
+            requestAnimationFrame(() => {
+                suppressScroll = false;
+            });
         };
 
         const avgAspect = () => {
@@ -1108,7 +1130,12 @@ function Clothing() {
             if (!loaded.img || imgOwnedByOtherSlot(loaded.img, slot)) return;
             const prevWidth = slot.width;
             applyVisuals(slot, loaded);
-            if (Math.abs(slot.width - prevWidth) > 0.5) packRow(slot.row);
+            if (
+                Math.abs(slot.width - prevWidth) > 0.5
+                && !rowLayoutQuiet(slot.row)
+            ) {
+                packRow(slot.row);
+            }
             paint(slot);
         };
 
@@ -1290,6 +1317,7 @@ function Clothing() {
 
         const recycle = (slot) => {
             if (slot.frozen) return;
+            const wasOwned = !!(viewer && slotIsHeld(slot));
             if (viewer) {
                 if (viewer.slot === slot) viewer.tileGone = true;
                 const departing = viewer.departures.find((item) => item.slot === slot);
@@ -1305,7 +1333,12 @@ function Clothing() {
             } else {
                 wrapSlot(slot, slot.spec);
             }
-            pumpSmalls();
+            if (wasOwned) {
+                slot.paintedOpacity = 1;
+                slot.el.style.opacity = '1';
+                paint(slot);
+            }
+            if (!(viewer && viewer.phase === 'closing')) pumpSmalls();
         };
 
         const ensureReadyBeforeVisible = (slot) => {
@@ -1318,7 +1351,12 @@ function Clothing() {
             releaseReserved(slot.spec);
             applyVisuals(slot, ready);
             releaseReserved(ready);
-            if (Math.abs(slot.width - prevWidth) > 0.5) packRow(slot.row);
+            if (
+                Math.abs(slot.width - prevWidth) > 0.5
+                && !rowLayoutQuiet(slot.row)
+            ) {
+                packRow(slot.row);
+            }
             paint(slot);
         };
 
@@ -1599,9 +1637,6 @@ function Clothing() {
                 const blockedFlag = blocked ? '1' : '0';
                 if (row.dataset.blocked !== blockedFlag) {
                     row.dataset.blocked = blockedFlag;
-                    row.querySelectorAll('.stream-item').forEach((item) => {
-                        item.style.pointerEvents = blocked ? 'none' : '';
-                    });
                 }
                 const z = viewer && stay ? '2' : '';
                 if (row.style.zIndex !== z) row.style.zIndex = z;
@@ -1854,6 +1889,13 @@ function Clothing() {
         const thumbOnScreen = (thumb) =>
             !!thumb && thumb.left < window.innerWidth && thumb.left + thumb.width > 0;
 
+        const homeTileStillThere = (slot, key, tileGone) => {
+            if (tileGone || !slot || !key) return false;
+            if (!slot.el || !rows[slot.row] || slot.el.parentNode !== rows[slot.row]) return false;
+            if (photoKey(slot.spec) !== key) return false;
+            return thumbOnScreen(liveThumb(slot));
+        };
+
         const exitRightPose = (layout, thumb, rowIndex) => {
             const width = thumb?.width || itemHeight;
             const height = thumb?.height || itemHeight;
@@ -1867,22 +1909,21 @@ function Clothing() {
             };
         };
 
-        const closeTargetFor = (slot, layout, tileGone, homeWidth) => {
-            const thumb = slot ? liveThumb(slot) : null;
-            if (tileGone || !thumbOnScreen(thumb)) {
-                return {
-                    exitRight: true,
-                    pose: exitRightPose(
-                        layout,
-                        {
-                            width: homeWidth || thumb?.width || itemHeight,
-                            height: itemHeight,
-                        },
-                        slot ? slot.row : 0
-                    ),
-                };
+        const closeTargetFor = (slot, layout, tileGone, homeWidth, homeKey, homeRow) => {
+            if (homeTileStillThere(slot, homeKey, tileGone)) {
+                return { exitRight: false, pose: poseFromThumb(liveThumb(slot), layout) };
             }
-            return { exitRight: false, pose: poseFromThumb(thumb, layout) };
+            return {
+                exitRight: true,
+                pose: exitRightPose(
+                    layout,
+                    {
+                        width: homeWidth || itemHeight,
+                        height: itemHeight,
+                    },
+                    homeRow != null ? homeRow : (slot ? slot.row : 0)
+                ),
+            };
         };
 
         const placeNode = (node, pose) => {
@@ -1996,6 +2037,7 @@ function Clothing() {
             viewer.pose = pose;
             placeNode(activeFlyer, pose);
             setFlyerFrame(activeFlyer, viewer.frameOpacity);
+            if (viewer.phase === 'closing' || viewer.closeDone) return;
             const extra = (layout.border || 0) * pose.scale * (viewer.frameOpacity || 0);
             const right = pose.x + layout.inner.width * pose.scale + extra;
             const top = pose.y - extra;
@@ -2298,30 +2340,36 @@ function Clothing() {
         const finishViewer = () => {
             if (!viewer) return;
             const slot = viewer.slot;
+            const revealHome = homeTileStillThere(slot, viewer.shownKey, viewer.tileGone);
             const departures = viewer.departures;
             const flyer = activeFlyer;
-            viewer = null;
-            revealSlot(slot);
+            quietRows = new Set();
+            if (slot) quietRows.add(slot.row);
             departures.forEach((dep) => {
-                revealSlot(dep.slot);
-                releaseFlyer(dep.flyer);
+                if (dep.slot) quietRows.add(dep.slot.row);
+            });
+            quietRowsUntil = performance.now() + 1200;
+            viewer = null;
+            if (revealHome) revealSlot(slot);
+            const leftoverFlyers = [];
+            departures.forEach((dep) => {
+                if (homeTileStillThere(dep.slot, dep.shownKey, dep.tileGone)) {
+                    revealSlot(dep.slot);
+                }
+                if (dep.flyer?.root) dep.flyer.root.hidden = true;
+                leftoverFlyers.push(dep.flyer);
             });
             applyRows(0);
-            releaseFlyer(flyer);
+            if (flyer?.root) flyer.root.hidden = true;
             activeFlyer = homeFlyer;
-            unlockScroll();
-            repairVisibleRows();
-            resetOverlayClip();
             overlay.hidden = true;
             closeBtn.hidden = true;
             caption.style.opacity = '0';
             caption.hidden = true;
-            clearPanelReveal();
             panelShown = false;
             panel.classList.remove('is-leaving');
             panel.style.opacity = '0';
             panel.style.pointerEvents = 'none';
-            panel.hidden = true;
             closeBtn.style.willChange = 'auto';
             if (menuEl) {
                 menuEl.style.opacity = '';
@@ -2332,7 +2380,37 @@ function Clothing() {
                 hoverSlot.el.classList.remove('is-hovered');
                 hoverSlot = null;
             }
-            syncPlayback();
+            const settle = () => {
+                if (cancelled) return;
+                leftoverFlyers.concat(deferredFlyers).forEach((node) => {
+                    if (node && node !== homeFlyer && node !== activeFlyer) releaseFlyer(node);
+                });
+                deferredFlyers = [];
+                if (viewer) {
+                    if (flyer && flyer !== homeFlyer && flyer !== activeFlyer) releaseFlyer(flyer);
+                    return;
+                }
+                if (flyer === homeFlyer) releaseFlyer(homeFlyer);
+                else if (flyer && flyer !== activeFlyer) releaseFlyer(flyer);
+                clearPanelReveal();
+                resetOverlayClip();
+                panel.style.transition = '';
+                panel.hidden = true;
+                unlockScroll();
+                syncPlayback();
+                const repairLater = () => {
+                    if (cancelled || viewer) return;
+                    repairVisibleRows();
+                };
+                if (typeof requestIdleCallback === 'function') {
+                    requestIdleCallback(repairLater, { timeout: 500 });
+                } else {
+                    window.setTimeout(repairLater, 200);
+                }
+            };
+            postCloseFrame = requestAnimationFrame(() => {
+                postCloseFrame = requestAnimationFrame(settle);
+            });
         };
 
         const advanceDepartures = (now) => {
@@ -2341,10 +2419,23 @@ function Clothing() {
             viewer.departures = viewer.departures.filter((dep) => {
                 const raw = Math.min(1, (now - dep.t0) / duration);
                 const amount = easeClose(raw);
-                const next = closeTargetFor(dep.slot, dep.layout, dep.tileGone, dep.homeThumbWidth);
-                if (next.exitRight && !dep.tileGone) {
-                    dep.from = startPoseFor(dep.pose, next.pose, amount);
-                    dep.tileGone = true;
+                let next;
+                if (dep.closeExitRight) {
+                    next = { exitRight: true, pose: dep.closeTo };
+                } else {
+                    next = closeTargetFor(
+                        dep.slot,
+                        dep.layout,
+                        dep.tileGone,
+                        dep.homeThumbWidth,
+                        dep.shownKey,
+                        dep.homeRow
+                    );
+                    if (next.exitRight) {
+                        dep.from = startPoseFor(dep.pose, next.pose, amount);
+                        dep.closeExitRight = true;
+                        dep.closeTo = next.pose;
+                    }
                 }
                 const pose = reducedMotion
                     ? dep.from
@@ -2352,13 +2443,17 @@ function Clothing() {
                 dep.pose = pose;
                 dep.thumbOpacity = 0;
                 dep.frameOpacity = frameOpacityFor('closing', amount);
-                dep.slot.el.style.opacity = '0';
+                if (!dep.tileGone) dep.slot.el.style.opacity = '0';
                 placeNode(dep.flyer, pose);
                 setFlyerFrame(dep.flyer, dep.frameOpacity);
                 if (reducedMotion) dep.flyer.root.style.opacity = String(1 - amount);
                 if (raw >= 1) {
-                    revealSlot(dep.slot);
-                    releaseFlyer(dep.flyer);
+                    if (homeTileStillThere(dep.slot, dep.shownKey, dep.tileGone)) {
+                        revealSlot(dep.slot);
+                    }
+                    if (dep.flyer?.root) dep.flyer.root.hidden = true;
+                    if (viewer && viewer.phase === 'closing') deferredFlyers.push(dep.flyer);
+                    else releaseFlyer(dep.flyer);
                     return false;
                 }
                 return true;
@@ -2453,12 +2548,18 @@ function Clothing() {
                 viewer.thumbOpacity = 0;
                 viewer.frameOpacity = reducedMotion ? 1 - amount : frameOpacityFor('closing', amount);
                 viewer.closeDone = raw >= 1;
+                if (GALLERY_PANEL_ENABLED && !panel.hidden) {
+                    const fade = Math.min(1, (now - viewer.closeT0) / Math.max(1, GALLERY_TEXT_OUT_MS));
+                    panel.style.opacity = String(1 - fade);
+                }
                 if (!viewer.closeExitRight) {
                     const next = closeTargetFor(
                         viewer.slot,
                         viewer.layout,
                         viewer.tileGone,
-                        viewer.homeThumbWidth
+                        viewer.homeThumbWidth,
+                        viewer.shownKey,
+                        viewer.homeRow
                     );
                     if (next.exitRight) {
                         viewer.closeFrom = startPoseFor(viewer.pose, next.pose, amount);
@@ -2475,19 +2576,17 @@ function Clothing() {
             advanceDepartures(now);
 
             if (!viewer) return;
-            syncCloseButton();
-            syncCaption();
-            syncPanel();
+            if (viewer.phase !== 'closing') {
+                syncCloseButton();
+                syncCaption();
+                syncPanel();
+            }
 
             if (viewer.phase === 'closing' && viewer.closeDone) {
-                if (!viewer.closeExitRight && !reducedMotion) {
-                    placeOverlay(
-                        poseFromThumb(liveThumb(viewer.slot), viewer.layout),
-                        viewer.layout
-                    );
+                if (!viewer.closeExitRight) {
+                    viewer.thumbOpacity = 1;
+                    revealSlot(viewer.slot);
                 }
-                viewer.thumbOpacity = 1;
-                revealSlot(viewer.slot);
                 activeFlyer.root.hidden = true;
                 if (viewer.departures.length === 0) finishViewer();
             }
@@ -2524,6 +2623,7 @@ function Clothing() {
                 tileGone: false,
                 closeExitRight: false,
                 homeThumbWidth: slot.width,
+                homeRow: slot.row,
                 rowMotion: 'in',
                 rowT0: now,
                 rowAmount: 0,
@@ -2581,7 +2681,8 @@ function Clothing() {
         const isFramingRow = (rowIndex) => rowStaysVisible(rowIndex);
 
         const switchTo = (slot) => {
-            if (!viewer || viewer.phase === 'closing' || slot === viewer.slot) return;
+            if (!viewer || viewer.phase === 'closing') return;
+            if (slot === viewer.slot && !viewer.tileGone) return;
             if (!isFramingRow(slot.row)) return;
 
             const now = performance.now();
@@ -2619,7 +2720,9 @@ function Clothing() {
                 thumbOpacity: 0,
                 frameOpacity: viewer.frameOpacity || 1,
                 tileGone: !!viewer.tileGone,
+                closeExitRight: false,
                 homeThumbWidth: viewer.homeThumbWidth,
+                homeRow: viewer.homeRow,
             });
             activeFlyer = node;
             node.root.style.willChange = 'transform';
@@ -2631,6 +2734,7 @@ function Clothing() {
             viewer.tileGone = false;
             viewer.closeExitRight = false;
             viewer.homeThumbWidth = slot.width;
+            viewer.homeRow = slot.row;
             viewer.phase = 'switching';
             viewer.t0 = now;
             viewer.from = from;
@@ -2689,19 +2793,21 @@ function Clothing() {
                 viewer.slot,
                 viewer.layout,
                 viewer.tileGone,
-                viewer.homeThumbWidth
+                viewer.homeThumbWidth,
+                viewer.shownKey,
+                viewer.homeRow
             );
             viewer.closeExitRight = closingTo.exitRight;
             viewer.closeTo = closingTo.pose;
             viewer.closeDone = false;
             viewer.thumbOpacity = 0;
             caption.style.opacity = '0';
-            // Freeze the sweep where it is and fade the text out quickly; the
-            // per-character layer is cleaned up once the photo has landed.
+            // Freeze the sweep where it is; opacity is driven on the same rAF
+            // as the shrink so the CSS panel transition cannot fight it.
             stopPanelRevealLoop();
             panelShown = false;
             panel.classList.add('is-leaving');
-            panel.style.opacity = '0';
+            panel.style.transition = 'none';
             panel.style.pointerEvents = 'none';
             closeBtn.style.opacity = '0';
             closeBtn.style.pointerEvents = 'none';
@@ -2717,7 +2823,7 @@ function Clothing() {
                 return;
             }
             if (viewer.phase === 'closing' || !isFramingRow(slot.row)) return;
-            if (slot === viewer.slot) return;
+            if (slot === viewer.slot && !viewer.tileGone) return;
             switchTo(slot);
         };
 
@@ -2850,6 +2956,7 @@ function Clothing() {
         };
 
         const packRow = (rowIndex, fromRight) => {
+            if (rowLayoutQuiet(rowIndex)) return;
             const mine = pool
                 .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
                 .sort((a, b) => a.x - b.x);
@@ -2938,7 +3045,7 @@ function Clothing() {
         };
 
         const shiftSlotsFrom = (rowIndex, minX, delta) => {
-            if (!delta) return;
+            if (!delta || rowLayoutQuiet(rowIndex)) return;
             pool.forEach((slot) => {
                 if (slot.row !== rowIndex || !slotIsLive(slot)) return;
                 if (slot.x < minX - 0.5) return;
@@ -2948,6 +3055,7 @@ function Clothing() {
         };
 
         const fillRealGap = (rowIndex, leftX, rightX, leftWidth, rightWidth, grow) => {
+            if (rowLayoutQuiet(rowIndex)) return 0;
             let added = 0;
             let left = leftX;
             let right = rightX;
@@ -2991,6 +3099,7 @@ function Clothing() {
         };
 
         const fillRowToCover = async (rowIndex, mode) => {
+            if (rowLayoutQuiet(rowIndex)) return;
             purgeDeadSlots(rowIndex);
             for (let n = 0; n < 80 && rowNeedsCoverage(rowIndex, mode); n += 1) {
                 const spec = dealUniqueSpec();
@@ -3274,6 +3383,7 @@ function Clothing() {
                 });
             }
             for (let index = from; index <= to; index += 1) {
+                if (rowLayoutQuiet(index)) continue;
                 if (introProtect(index)) continue;
                 if (!rows[index]) {
                     warnRowRepair(index, 'missing');
@@ -3366,7 +3476,7 @@ function Clothing() {
                 if (!slotHasLoadedPhoto(slot)) continue;
                 if (slot.el.style.pointerEvents === 'none') continue;
                 if (slot.el.style.opacity === '0' || slot.paintedOpacity === 0) continue;
-                if (viewer && (!rowStaysVisible(slot.row) || slot === viewer.slot)) continue;
+                if (viewer && (!rowStaysVisible(slot.row) || (slot === viewer.slot && !viewer.tileGone))) continue;
                 const scale = slot.scale || 1;
                 const width = slot.width * scale;
                 const height = itemHeight * scale;
@@ -3516,8 +3626,8 @@ function Clothing() {
             if (!running) return;
             const dt = lastTime ? Math.min(MAX_FRAME_SECONDS, (now - lastTime) / 1000) : 0;
             lastTime = now;
-            cacheStreamOrigin();
-            purgeDeadSlots();
+            const closing = viewer && viewer.phase === 'closing';
+            if (!closing) purgeDeadSlots();
 
             const motionScale = reducedMotion ? REDUCED_MOTION_SPEED_SCALE : 1;
             if (motionScale > 0 && dt > 0) {
@@ -3530,7 +3640,7 @@ function Clothing() {
                         recycle(slot);
                         continue;
                     }
-                    ensureReadyBeforeVisible(slot);
+                    if (!closing) ensureReadyBeforeVisible(slot);
                     const rowHidden = rows[slot.row]?.dataset.opacity === '0';
                     if (!rowHidden || slotIsHeld(slot)) paint(slot);
                 }
@@ -3539,12 +3649,12 @@ function Clothing() {
             }
 
             advanceViewer(now, dt);
-            if (fineHover) syncHover();
-            if (process.env.NODE_ENV !== 'production') {
+            if (fineHover && !closing) syncHover();
+            if (!closing && process.env.NODE_ENV !== 'production') {
                 warnEmptyVisibleTiles();
                 warnOnScreenDuplicates();
             }
-            if (readyPoolCount() < readyPoolMin()) pumpSmalls();
+            if (!closing && readyPoolCount() < readyPoolMin()) pumpSmalls();
 
             if (running) rafId = requestAnimationFrame(tick);
         };
@@ -3586,7 +3696,7 @@ function Clothing() {
             pointerY = event.clientY;
             if (viewer.phase === 'open') {
                 const slot = slotUnderPointer();
-                if (slot && isFramingRow(slot.row) && slot !== viewer.slot) {
+                if (slot && isFramingRow(slot.row) && (slot !== viewer.slot || viewer.tileGone)) {
                     switchTo(slot);
                     return;
                 }
@@ -3669,7 +3779,8 @@ function Clothing() {
 
         let scrollFrame = 0;
         const onScroll = () => {
-            if (scrollLockY != null || pageIsZoomed()) return;
+            if (suppressScroll || scrollLockY != null || pageIsZoomed()) return;
+            if (viewer && viewer.phase === 'closing') return;
             const y = pageScroll();
             const t = performance.now();
             if (lastScrollT) {
@@ -3680,7 +3791,8 @@ function Clothing() {
             if (scrollFrame) return;
             scrollFrame = requestAnimationFrame(() => {
                 scrollFrame = 0;
-                if (cancelled || scrollLockY != null) return;
+                if (cancelled || suppressScroll || scrollLockY != null) return;
+                if (viewer && viewer.phase === 'closing') return;
                 pumpSmalls();
                 const { first, last } = visibleBounds();
                 if (`${first}:${last}` !== mountedKey) mountRange();
@@ -3696,6 +3808,7 @@ function Clothing() {
             resizeFrame = requestAnimationFrame(() => {
                 resizeFrame = 0;
                 if (cancelled || pageIsZoomed()) return;
+                if (viewer && viewer.phase === 'closing') return;
                 const previousHeight = itemHeight;
                 applyLayoutMetrics();
                 allocatedRows = 0;
@@ -3751,7 +3864,8 @@ function Clothing() {
         }
 
         const repairTimer = window.setInterval(() => {
-            if (cancelled || scrollLockY != null) return;
+            if (cancelled || suppressScroll || scrollLockY != null) return;
+            if (viewer) return;
             repairVisibleRows();
         }, 500);
 
@@ -3775,6 +3889,7 @@ function Clothing() {
             }
             if (resizeFrame) cancelAnimationFrame(resizeFrame);
             if (scrollFrame) cancelAnimationFrame(scrollFrame);
+            if (postCloseFrame) cancelAnimationFrame(postCloseFrame);
             unlockScroll();
             section.replaceChildren();
             if (menuEl) {
