@@ -3,12 +3,12 @@
     "title": "3D Design",
     "cardShape": "square",
     "items": [
-      { "type": "image", "src": "/Product-design/3d-Design1.1.png", "title": "", "width": 1129, "height": 994 },
-      { "type": "image", "src": "/Product-design/3d-Design1.2.png", "title": "", "width": 1216, "height": 996 },
-      { "type": "image", "src": "/Product-design/3d-Design2.1.png", "title": "", "width": 1236, "height": 910 },
-      { "type": "image", "src": "/Product-design/3d-Design2.2.png", "title": "", "width": 1228, "height": 924 },
-      { "type": "image", "src": "/Product-design/3d-Design3.1.png", "title": "", "width": 1356, "height": 946 },
-      { "type": "image", "src": "/Product-design/3d-Design3.2.png", "title": "", "width": 1290, "height": 880 }
+      { "type": "image", "src": "/Product-design/3d-Design1.1.png", "title": "", "date": "", "description": "", "width": 1129, "height": 994 },
+      { "type": "image", "src": "/Product-design/3d-Design1.2.png", "title": "", "date": "", "description": "", "width": 1216, "height": 996 },
+      { "type": "image", "src": "/Product-design/3d-Design2.1.png", "title": "", "date": "", "description": "", "width": 1236, "height": 910 },
+      { "type": "image", "src": "/Product-design/3d-Design2.2.png", "title": "", "date": "", "description": "", "width": 1228, "height": 924 },
+      { "type": "image", "src": "/Product-design/3d-Design3.1.png", "title": "", "date": "", "description": "", "width": 1356, "height": 946 },
+      { "type": "image", "src": "/Product-design/3d-Design3.2.png", "title": "", "date": "", "description": "", "width": 1290, "height": 880 }
     ]
   },
   {
@@ -17,9 +17,9 @@
     "cardAspect": 1.5,
     "fit": "cover",
     "items": [
-      { "type": "image", "src": "/Product-design/Graphic-Design1.jpg", "title": "", "width": 2000, "height": 1333 },
-      { "type": "image", "src": "/Product-design/Graphic-Design2.jpg", "title": "", "width": 2000, "height": 1333 },
-      { "type": "image", "src": "/Product-design/Graphic-Design5.jpg", "title": "", "width": 2000, "height": 1499 }
+      { "type": "image", "src": "/Product-design/Graphic-Design1.jpg", "title": "", "date": "", "description": "", "width": 2000, "height": 1333 },
+      { "type": "image", "src": "/Product-design/Graphic-Design2.jpg", "title": "", "date": "", "description": "", "width": 2000, "height": 1333 },
+      { "type": "image", "src": "/Product-design/Graphic-Design5.jpg", "title": "", "date": "", "description": "", "width": 2000, "height": 1499 }
     ]
   },
   {
@@ -27,17 +27,17 @@
     "cardShape": "natural",
     "frame": "thin-white",
     "items": [
-      { "type": "image", "src": "/Product-design/MTPro1.png", "title": "", "width": 1174, "height": 1024 },
-      { "type": "image", "src": "/Product-design/MTPro2.png", "title": "", "width": 1056, "height": 986 },
-      { "type": "image", "src": "/Product-design/MTPro3.png", "title": "", "width": 1093, "height": 941 }
+      { "type": "image", "src": "/Product-design/MTPro1.png", "title": "", "date": "", "description": "", "width": 1174, "height": 1024 },
+      { "type": "image", "src": "/Product-design/MTPro2.png", "title": "", "date": "", "description": "", "width": 1056, "height": 986 },
+      { "type": "image", "src": "/Product-design/MTPro3.png", "title": "", "date": "", "description": "", "width": 1093, "height": 941 }
     ]
   },
   {
     "title": "Billboard Design",
     "cardShape": "natural",
     "items": [
-      { "type": "image", "src": "/Product-design/Graphic-Design3.png", "title": "", "width": 1363, "height": 337 },
-      { "type": "image", "src": "/Product-design/Graphic-Design4.png", "title": "", "width": 1108, "height": 274 }
+      { "type": "image", "src": "/Product-design/Graphic-Design3.png", "title": "", "date": "", "description": "", "width": 1363, "height": 337 },
+      { "type": "image", "src": "/Product-design/Graphic-Design4.png", "title": "", "date": "", "description": "", "width": 1108, "height": 274 }
     ]
   }
 ]

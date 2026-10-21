@@ -160,13 +160,7 @@
     line-height: 1.3;
 }
 
-.design-stacks.is-dimmed .design-stack {
-    transition: opacity 280ms ease, filter 280ms ease;
-}
-
 .design-stack.is-background {
-    opacity: 0.15;
-    filter: blur(2px);
     pointer-events: none;
 }
 
@@ -179,26 +173,34 @@
     position: fixed;
     inset: 0;
     z-index: 80;
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    padding: 5.5rem 1.5rem 2.5rem;
     box-sizing: border-box;
-    overflow: auto;
+    overflow: hidden;
     background: transparent;
 }
 
-.stack-overlay-inner {
-    width: min(980px, 100%);
-    margin: 0 auto;
+.stack-page-veil {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0;
+    background: rgba(12, 8, 6, 0.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
 }
 
 .stack-overlay-head {
+    position: absolute;
+    top: 5.5rem;
+    left: 0;
+    right: 0;
+    z-index: 6;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
-    margin-bottom: 1.75rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--chrome-fade-ms, 180ms) cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .stack-overlay-title {
@@ -209,13 +211,14 @@
     letter-spacing: var(--body-copy-letter-spacing);
     color: var(--body-copy-color);
     text-align: center;
+    pointer-events: auto;
 }
 
 .stack-overlay-close {
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
+    position: fixed;
+    right: 1.25rem;
+    top: 5.5rem;
+    z-index: 7;
     width: 44px;
     height: 44px;
     padding: 0;
@@ -226,6 +229,13 @@
     font-size: 1.7rem;
     line-height: 1;
     cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--chrome-fade-ms, 180ms) cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.stack-overlay.is-chrome-on:not(.is-leaving) .stack-overlay-head,
+.stack-overlay.is-chrome-on:not(.is-leaving) .stack-overlay-close {
+    opacity: 1;
 }
 
 .stack-overlay-close:hover,
@@ -234,84 +244,294 @@
     outline: none;
 }
 
-.stack-overlay-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 1.1rem;
+.stack-overlay-stage {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    overflow: visible;
+}
+
+.stack-detail-rail-wrap {
+    position: absolute;
+    z-index: 3;
+    overflow: hidden;
+    pointer-events: auto;
+}
+
+.stack-detail-rail {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    scrollbar-width: none;
+}
+
+.stack-detail-rail::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+.stack-detail-rail-wrap.is-scrollable.is-y .stack-detail-rail {
+    overflow-y: auto;
+    overflow-x: hidden;
+    touch-action: pan-y;
+}
+
+.stack-detail-rail-wrap.is-scrollable.is-x .stack-detail-rail {
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: pan-x;
+}
+
+.stack-detail-rail-inner {
+    display: flex;
+    box-sizing: border-box;
+    align-items: center;
+}
+
+.stack-detail-rail-wrap.is-y .stack-detail-rail-inner {
+    flex-direction: column;
+    justify-content: flex-start;
+    min-height: 100%;
+    width: 100%;
+}
+
+.stack-detail-rail-wrap.is-x .stack-detail-rail-inner {
+    flex-direction: row;
+    justify-content: flex-start;
+    min-width: 100%;
+    height: 100%;
+}
+
+.stack-detail-rail-fade {
+    position: absolute;
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 160ms ease;
+}
+
+.stack-detail-rail-wrap.is-y .stack-detail-rail-fade.is-start {
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 42px;
+    background: linear-gradient(to bottom, rgba(20, 12, 8, 0.78), transparent);
+}
+
+.stack-detail-rail-wrap.is-y .stack-detail-rail-fade.is-end {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 42px;
+    background: linear-gradient(to top, rgba(20, 12, 8, 0.78), transparent);
+}
+
+.stack-detail-rail-wrap.is-x .stack-detail-rail-fade.is-start {
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 42px;
+    background: linear-gradient(to right, rgba(20, 12, 8, 0.78), transparent);
+}
+
+.stack-detail-rail-wrap.is-x .stack-detail-rail-fade.is-end {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 42px;
+    background: linear-gradient(to left, rgba(20, 12, 8, 0.78), transparent);
+}
+
+.stack-detail-rail-wrap.has-fade-start .stack-detail-rail-fade.is-start,
+.stack-detail-rail-wrap.has-fade-end .stack-detail-rail-fade.is-end {
+    opacity: 1;
+}
+
+.stack-detail-rail-bar {
+    position: absolute;
+    z-index: 3;
+    pointer-events: auto;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 999px;
+}
+
+.stack-detail-rail-wrap.is-y .stack-detail-rail-bar {
+    top: 4px;
+    right: 1px;
+    bottom: 4px;
+    width: 4px;
+}
+
+.stack-detail-rail-wrap.is-x .stack-detail-rail-bar {
+    right: 4px;
+    bottom: 1px;
+    left: 4px;
+    height: 4px;
+}
+
+.stack-detail-rail-bar-thumb {
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 999px;
+}
+
+.stack-detail-rail-wrap.is-y .stack-detail-rail-bar-thumb {
+    right: 0;
+    width: 100%;
+}
+
+.stack-detail-rail-wrap.is-x .stack-detail-rail-bar-thumb {
+    bottom: 0;
+    height: 100%;
+}
+
+.stack-grid-card.is-docked {
+    position: relative;
+    left: auto;
+    top: auto;
+    flex: 0 0 auto;
+    transform: none;
+    clip-path: none;
+}
+
+.stack-detail-copy {
+    position: absolute;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    box-sizing: border-box;
+    font-family: var(--body-copy-font-family);
+    font-size: clamp(14px, 1vw, 15px);
+    letter-spacing: var(--body-copy-letter-spacing);
+    line-height: 1.6;
+    color: var(--body-copy-color);
+    text-align: left;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.stack-detail-copy.is-on {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.stack-detail-copy.is-stacked {
+    justify-content: flex-start;
+}
+
+.stack-detail-title {
+    display: block;
+    font-size: clamp(20px, 1.7vw, 24px);
+    font-style: italic;
+    line-height: 1.25;
+}
+
+.stack-detail-date {
+    margin-top: 0.3em;
+}
+
+.stack-detail-text {
+    margin: 0.85em 0 0;
+}
+
+.stack-detail-copy .stream-panel-scramble {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.stack-detail-copy .stream-panel-scramble-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.stack-detail-copy .stream-panel-glyph {
+    position: absolute;
+    white-space: pre;
 }
 
 .stack-grid-card {
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
     box-sizing: border-box;
+    overflow: visible;
+    background: transparent;
+    will-change: transform, opacity;
+}
+
+.stack-grid-card-face {
+    display: block;
+    width: 100%;
+    height: 100%;
     border-radius: 2px;
     overflow: hidden;
     background: transparent;
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
-    animation: stack-deal-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
-    animation-delay: var(--delay, 0ms);
+    transform: scale(1);
+    transform-origin: center center;
 }
 
-.stack-grid-card.is-square {
-    aspect-ratio: 1;
+.stack-grid-card.is-square .stack-grid-card-face {
     background: #fff;
 }
 
-.stack-grid-card.is-fixed {
-    aspect-ratio: var(--aspect, 1.5);
-}
-
-.stack-grid-card.is-natural {
-    aspect-ratio: var(--aspect, 1);
-}
-
-.stack-grid-card.is-framed {
+.stack-grid-card.is-framed .stack-grid-card-face {
     background: #fff;
     padding: max(4px, 3%);
+    box-sizing: border-box;
 }
 
 .stack-grid-card.is-cover .stack-card-image {
     object-fit: cover;
 }
 
-.stack-overlay.is-leaving .stack-grid-card {
-    animation: stack-deal-out 320ms ease both;
+.stack-grid-card.is-hero {
+    cursor: default;
 }
 
-.stack-overlay.is-leaving .stack-overlay-head {
+.stack-grid-card.is-hero .stack-grid-card-face,
+.stack-grid-card.is-hero.is-square .stack-grid-card-face,
+.stack-grid-card.is-hero.is-framed .stack-grid-card-face {
+    background: transparent;
+    padding: 0;
+    box-shadow: none;
+}
+
+.stack-grid-card.is-hero .stack-card-image,
+.stack-grid-card.is-hero.is-cover .stack-card-image,
+.stack-grid-card.is-hero.is-square .stack-card-image {
+    object-fit: contain;
+    background: transparent;
+}
+
+.stack-overlay.is-leaving .stack-overlay-head,
+.stack-overlay.is-leaving .stack-overlay-close {
     opacity: 0;
-    transition: opacity 150ms ease;
 }
 
-@keyframes stack-deal-in {
-    from {
-        opacity: 0;
-        transform: translate3d(var(--from-x), var(--from-y), 0) scale(0.72);
-    }
-    to {
-        opacity: 1;
-        transform: translate3d(0, 0, 0) scale(1);
-    }
-}
-
-@keyframes stack-deal-out {
-    from {
-        opacity: 1;
-        transform: translate3d(0, 0, 0) scale(1);
-    }
-    to {
-        opacity: 0;
-        transform: translate3d(var(--from-x), var(--from-y), 0) scale(0.72);
-    }
-}
-
-.stack-overlay.is-reduced .stack-grid-card,
-.stack-overlay.is-reduced.is-leaving .stack-grid-card {
-    animation: none;
-}
-
-@media (max-width: 900px) {
-    .stack-overlay-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
+.stack-grid-card.is-pile .stack-grid-card-face {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16), 0 3px 8px rgba(0, 0, 0, 0.1);
 }
 
 @media (max-width: 640px) {
@@ -331,21 +551,27 @@
         --card-size: min(72vw, 280px);
         --stack-gap-x: 0px;
     }
+}
 
-    .stack-overlay-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (hover: hover) and (pointer: fine) {
+    .stack-grid-card.is-hot .stack-grid-card-face {
+        transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .stack-grid-card.is-hot:hover .stack-grid-card-face {
+        transform: scale(1.05);
     }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .stack-card,
-    .design-stacks.is-dimmed .design-stack,
-    .stack-overlay.is-leaving .stack-overlay-head {
+    .stack-overlay-head,
+    .stack-overlay-close,
+    .stack-grid-card.is-hot .stack-grid-card-face {
         transition: none;
     }
 
-    .stack-grid-card,
-    .stack-overlay.is-leaving .stack-grid-card {
-        animation: none;
+    .stack-grid-card.is-hot:hover .stack-grid-card-face {
+        transform: none;
     }
 }

@@ -4,7 +4,7 @@ import '../styles/Header.css';
 import '../styles/Clothing.css';
 import photoManifest from '../data/photo-manifest.json';
 import photoInfo from '../data/photo-info.json';
-import { randomScrambleChar, SCRAMBLE_START_INTERVAL_MS } from '../utils/decrypt';
+import { createTextReveal } from '../utils/textReveal';
 
 const ASPECT_BY_NUMBER = new Map(
     photoManifest.map((entry) => [entry.number, entry.aspect])
@@ -121,8 +121,8 @@ const CAPTION_RESERVE_PX = CAPTION_GAP_PX + Math.ceil(CAPTION_MAX_FONT_PX * 1.3)
 const PHOTO_COUNT = 194;
 const PHOTO_DIR = '/photos/Website digital/Photography';
 // 4, 47, 50 and 78 are held out on purpose.
-// 114–121 have a small export in the Large folder.
-const EXCLUDED_PHOTOS = [4, 47, 50, 78, 114, 115, 116, 117, 118, 119, 120, 121];
+// 116's Large long edge is 1746px, not ~2000.
+const EXCLUDED_PHOTOS = [4, 47, 50, 78, 116];
 // Skip numbers that are missing from small or Large (177 has neither file).
 const MISSING_PHOTOS = [177];
 
@@ -2085,199 +2085,39 @@ function Clothing() {
             if (caption.style.opacity !== value) caption.style.opacity = value;
         };
 
-        // Panel text reveal. The real text stays in flow so wrapping is locked;
-        // the scramble runs in an absolutely placed layer on top of it, the way
-        // the landing page overlays its decrypt value on a hidden sizer.
-        let panelRaf = 0;
-        let panelGlyphs = [];
-        let panelOverlay = null;
+        // Panel text reveal. Shared engine with Design Work: real text stays in
+        // flow so wrapping is locked; scramble sits on top and matches baseline.
         let panelShown = false;
+        const panelReveal = createTextReveal({
+            sweepMs: GALLERY_SWEEP_MS,
+            charMinMs: GALLERY_CHAR_MIN_MS,
+            charExtraMs: GALLERY_CHAR_EXTRA_MS,
+        });
 
         const panelTextEls = () => [panelTitle, panelYear, panelDetails, panelText];
 
+        const panelRevealArgs = () => ({
+            container: panel,
+            textEls: panelTextEls(),
+            ruleEl: panelRule,
+            innerEl: panelInner,
+        });
+
         const stopPanelRevealLoop = () => {
-            if (!panelRaf) return;
-            cancelAnimationFrame(panelRaf);
-            panelRaf = 0;
+            panelReveal.stop();
         };
 
-        // Puts the panel back to plain, selectable text.
         const clearPanelReveal = () => {
-            stopPanelRevealLoop();
-            panelGlyphs = [];
-            if (panelOverlay) {
-                panelOverlay.remove();
-                panelOverlay = null;
-            }
-            panelTextEls().forEach((el) => {
-                el.style.visibility = '';
-            });
-            panelRule.style.opacity = '';
-            panelRule.style.clipPath = '';
-            panelInner.removeAttribute('aria-hidden');
-            panel.removeAttribute('aria-label');
-        };
-
-        // Where a character actually paints, measured the same way for the real
-        // text and for a glyph: the text box, not the element box.
-        const textRect = (range, node, index) => {
-            range.setStart(node, index);
-            range.setEnd(node, index + 1);
-            return range.getBoundingClientRect();
-        };
-
-        // One measuring pass: every character's resting position, read once.
-        const buildPanelGlyphs = () => {
-            const base = panel.getBoundingClientRect();
-            const overlay = document.createElement('div');
-            overlay.className = 'stream-panel-scramble';
-            overlay.setAttribute('aria-hidden', 'true');
-            const range = document.createRange();
-            const glyphs = [];
-            const layers = [];
-            let maxX = 1;
-
-            panelTextEls().forEach((el) => {
-                const node = el.firstChild;
-                if (!node || node.nodeType !== 3 || !node.nodeValue) return;
-                const text = node.nodeValue;
-                const style = window.getComputedStyle(el);
-                const layer = document.createElement('span');
-                layer.className = 'stream-panel-scramble-layer';
-                layer.style.fontFamily = style.fontFamily;
-                layer.style.fontSize = style.fontSize;
-                layer.style.fontStyle = style.fontStyle;
-                layer.style.fontWeight = style.fontWeight;
-                let probe = null;
-                for (let index = 0; index < text.length; index += 1) {
-                    const char = text[index];
-                    if (char === ' ' || char === '\u00A0') continue;
-                    const rect = textRect(range, node, index);
-                    if (!rect.width) continue;
-                    const x = rect.left - base.left;
-                    const glyph = document.createElement('span');
-                    glyph.className = 'stream-panel-glyph';
-                    glyph.textContent = char;
-                    glyph.style.left = `${x}px`;
-                    glyph.style.top = `${rect.top - base.top}px`;
-                    // Matching the measured text box leaves no half-leading, so
-                    // the glyph's baseline lands on the real character's.
-                    glyph.style.lineHeight = `${rect.height}px`;
-                    glyph.style.opacity = '0';
-                    layer.append(glyph);
-                    glyphs.push({ el: glyph, char, x, start: 0, end: 0, tick: -1, done: false });
-                    if (x > maxX) maxX = x;
-                    if (!probe) probe = { glyph, rect, label: el.className };
-                }
-                if (!layer.childNodes.length) return;
-                overlay.append(layer);
-                layers.push({ layer, probe });
-            });
-
-            if (!glyphs.length) return false;
-            glyphs.forEach((glyph) => {
-                glyph.start = (glyph.x / maxX) * GALLERY_SWEEP_MS;
-                glyph.end =
-                    glyph.start + GALLERY_CHAR_MIN_MS + Math.random() * GALLERY_CHAR_EXTRA_MS;
-            });
-            panelGlyphs = glyphs;
-            panelOverlay = overlay;
-            const checked = process.env.NODE_ENV !== 'production'
-                ? { scrollHeight: panel.scrollHeight, innerTop: panelInner.getBoundingClientRect().top }
-                : null;
-            panelTextEls().forEach((el) => {
-                el.style.visibility = 'hidden';
-            });
-            panelInner.setAttribute('aria-hidden', 'true');
-            panel.append(overlay);
-
-            // Absorb any residual offset rather than trusting the font metrics:
-            // compare a rendered glyph with the character it covers.
-            const report = [];
-            layers.forEach(({ layer, probe }) => {
-                if (!probe) return;
-                const shown = textRect(range, probe.glyph.firstChild, 0);
-                const dx = probe.rect.left - shown.left;
-                const dy = probe.rect.top - shown.top;
-                if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
-                    layer.style.transform = `translate(${dx}px, ${dy}px)`;
-                }
-                if (checked) report.push({ line: probe.label, dx, dy, probe });
-            });
-
-            if (checked) {
-                const after = report.map(({ line, dx, dy, probe }) => {
-                    const fixed = textRect(range, probe.glyph.firstChild, 0);
-                    return {
-                        line,
-                        beforeDx: Number(dx.toFixed(2)),
-                        beforeDy: Number(dy.toFixed(2)),
-                        afterDx: Number((probe.rect.left - fixed.left).toFixed(2)),
-                        afterDy: Number((probe.rect.top - fixed.top).toFixed(2)),
-                    };
-                });
-                console.info('[panel] glyph vs real character offset', after);
-                console.info('[panel] overlay layout cost', {
-                    scrollHeight: panel.scrollHeight - checked.scrollHeight,
-                    innerTop: Number(
-                        (panelInner.getBoundingClientRect().top - checked.innerTop).toFixed(2)
-                    ),
-                });
-            }
-            return true;
+            panelReveal.clear(panelRevealArgs());
         };
 
         const startPanelReveal = () => {
-            clearPanelReveal();
             if (!GALLERY_PANEL_ENABLED || panel.hidden) return;
-            if (reducedMotion) return;
-            panel.setAttribute(
-                'aria-label',
-                panelTextEls().map((el) => el.textContent).filter(Boolean).join('. ')
-            );
-            if (!buildPanelGlyphs()) {
-                panel.removeAttribute('aria-label');
-                return;
-            }
-            panelRule.style.opacity = '0';
-            panelRule.style.clipPath = 'inset(0 100% 0 0)';
-            const t0 = performance.now();
-            const tick = (now) => {
-                panelRaf = 0;
-                const elapsed = now - t0;
-                let pending = 0;
-                for (let i = 0; i < panelGlyphs.length; i += 1) {
-                    const glyph = panelGlyphs[i];
-                    if (glyph.done) continue;
-                    if (elapsed < glyph.start) {
-                        pending += 1;
-                        continue;
-                    }
-                    if (elapsed >= glyph.end) {
-                        glyph.done = true;
-                        glyph.el.style.opacity = '1';
-                        if (glyph.el.textContent !== glyph.char) glyph.el.textContent = glyph.char;
-                        continue;
-                    }
-                    pending += 1;
-                    const amount = (elapsed - glyph.start) / (glyph.end - glyph.start);
-                    glyph.el.style.opacity = amount.toFixed(2);
-                    const step = Math.floor((elapsed - glyph.start) / SCRAMBLE_START_INTERVAL_MS);
-                    if (step !== glyph.tick) {
-                        glyph.tick = step;
-                        glyph.el.textContent = randomScrambleChar();
-                    }
-                }
-                const sweep = Math.min(1, elapsed / GALLERY_SWEEP_MS);
-                panelRule.style.opacity = String(Math.min(1, elapsed / 150));
-                panelRule.style.clipPath = `inset(0 ${((1 - sweep) * 100).toFixed(1)}% 0 0)`;
-                if (!pending && sweep >= 1) {
-                    clearPanelReveal();
-                    return;
-                }
-                panelRaf = requestAnimationFrame(tick);
-            };
-            panelRaf = requestAnimationFrame(tick);
+            panelReveal.start({
+                ...panelRevealArgs(),
+                reducedMotion,
+                debug: process.env.NODE_ENV !== 'production',
+            });
         };
 
         // On open and on switch the panel drops out without a fade, so the new
