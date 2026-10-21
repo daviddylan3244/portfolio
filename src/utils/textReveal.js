@@ -10,6 +10,35 @@ const textRect = (range, node, index) => {
     return range.getBoundingClientRect();
 };
 
+const textNodesIn = (el) => {
+    const nodes = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+        if (node.nodeValue) nodes.push(node);
+        node = walker.nextNode();
+    }
+    return nodes;
+};
+
+export function setMarkedText(el, text) {
+    if (!el) return;
+    el.replaceChildren();
+    const value = String(text ?? '');
+    if (!value) return;
+    const parts = value.split(/(\*[^*]+\*)/g);
+    parts.forEach((part) => {
+        if (!part) return;
+        if (part.length >= 2 && part.charAt(0) === '*' && part.charAt(part.length - 1) === '*') {
+            const em = document.createElement('em');
+            em.textContent = part.slice(1, -1);
+            el.append(em);
+            return;
+        }
+        el.append(document.createTextNode(part));
+    });
+}
+
 export function createTextReveal({
     overlayClass = 'stream-panel-scramble',
     layerClass = 'stream-panel-scramble-layer',
@@ -61,6 +90,8 @@ export function createTextReveal({
         innerEl,
         reducedMotion,
         debug,
+        debugLabel,
+        sweepWidth,
     } = {}) => {
         clear({ container, textEls, ruleEl, innerEl });
         if (!container) return false;
@@ -94,47 +125,64 @@ export function createTextReveal({
         let maxX = 1;
 
         overlayEls.forEach((el) => {
-            const node = el.firstChild;
-            if (!node || node.nodeType !== 3 || !node.nodeValue) return;
-            const text = node.nodeValue;
+            const nodes = textNodesIn(el);
+            if (!nodes.length) return;
             const style = window.getComputedStyle(el);
-            const layer = document.createElement('span');
-            layer.className = layerClass;
-            layer.style.fontFamily = style.fontFamily;
-            layer.style.fontSize = style.fontSize;
-            layer.style.fontStyle = style.fontStyle;
-            layer.style.fontWeight = style.fontWeight;
-            let probe = null;
-            for (let index = 0; index < text.length; index += 1) {
-                const char = text[index];
-                if (char === ' ' || char === '\u00A0') continue;
-                const rect = textRect(range, node, index);
-                if (!rect.width) continue;
-                const x = rect.left - base.left;
-                const glyph = document.createElement('span');
-                glyph.className = glyphClass;
-                glyph.textContent = char;
-                glyph.style.left = `${x}px`;
-                glyph.style.top = `${rect.top - base.top}px`;
-                glyph.style.lineHeight = `${rect.height}px`;
-                glyph.style.opacity = '0';
-                layer.append(glyph);
-                nextGlyphs.push({
-                    el: glyph,
-                    char,
-                    x,
-                    start: 0,
-                    end: 0,
-                    tick: -1,
-                    done: false,
-                    hold: holdSet.has(el),
-                });
-                if (x > maxX) maxX = x;
-                if (!probe) probe = { glyph, rect, label: el.className };
-            }
-            if (!layer.childNodes.length) return;
-            nextOverlay.append(layer);
-            layers.push({ layer, probe });
+            const layerFor = new Map();
+            const layerOf = (fontStyle) => {
+                let pack = layerFor.get(fontStyle);
+                if (pack) return pack;
+                const layer = document.createElement('span');
+                layer.className = layerClass;
+                layer.style.fontFamily = style.fontFamily;
+                layer.style.fontSize = style.fontSize;
+                layer.style.fontStyle = fontStyle;
+                layer.style.fontWeight = style.fontWeight;
+                pack = { layer, probe: null };
+                layerFor.set(fontStyle, pack);
+                return pack;
+            };
+            nodes.forEach((node) => {
+                const text = node.nodeValue;
+                const nodeStyle = window.getComputedStyle(node.parentNode);
+                const fontStyle = nodeStyle.fontStyle || style.fontStyle;
+                const pack = layerOf(fontStyle);
+                for (let index = 0; index < text.length; index += 1) {
+                    const char = text[index];
+                    if (char === ' ' || char === '\u00A0') continue;
+                    const rect = textRect(range, node, index);
+                    if (!rect.width) continue;
+                    const x = rect.left - base.left;
+                    const glyph = document.createElement('span');
+                    glyph.className = glyphClass;
+                    glyph.textContent = char;
+                    glyph.style.left = `${x}px`;
+                    glyph.style.top = `${rect.top - base.top}px`;
+                    glyph.style.lineHeight = `${rect.height}px`;
+                    glyph.style.fontStyle = fontStyle;
+                    glyph.style.opacity = '0';
+                    pack.layer.append(glyph);
+                    nextGlyphs.push({
+                        el: glyph,
+                        char,
+                        x,
+                        start: 0,
+                        end: 0,
+                        tick: -1,
+                        done: false,
+                        hold: holdSet.has(el),
+                        source: el,
+                        link: el.tagName === 'A',
+                    });
+                    if (x > maxX) maxX = x;
+                    if (!pack.probe) pack.probe = { glyph, rect, label: el.className };
+                }
+            });
+            layerFor.forEach((pack) => {
+                if (!pack.layer.childNodes.length) return;
+                nextOverlay.append(pack.layer);
+                layers.push(pack);
+            });
         });
 
         if (!nextGlyphs.length) {
@@ -146,8 +194,9 @@ export function createTextReveal({
             return false;
         }
 
+        const sweepSpan = Math.max(1, sweepWidth || maxX);
         nextGlyphs.forEach((glyph) => {
-            glyph.start = (glyph.x / maxX) * sweepMs;
+            glyph.start = (glyph.x / sweepSpan) * sweepMs;
             glyph.end = glyph.start + charMinMs + Math.random() * charExtraMs;
         });
         glyphs = nextGlyphs;
@@ -200,11 +249,32 @@ export function createTextReveal({
             ruleEl.style.clipPath = 'inset(0 100% 0 0)';
         }
 
+        const revealSettledLinks = () => {
+            const groups = new Map();
+            glyphs.forEach((glyph) => {
+                if (!glyph.link || !glyph.source) return;
+                const list = groups.get(glyph.source) || [];
+                list.push(glyph);
+                groups.set(glyph.source, list);
+            });
+            groups.forEach((list, el) => {
+                if (list.some((glyph) => !glyph.done)) return;
+                if (el.dataset.revealReady === '1') return;
+                el.dataset.revealReady = '1';
+                el.style.visibility = '';
+                el.classList.add('is-ready');
+                el.removeAttribute('tabindex');
+                list.forEach((glyph) => glyph.el.remove());
+            });
+        };
+
         if (reducedMotion) {
             glyphs.forEach((glyph) => {
                 glyph.el.style.opacity = '1';
                 glyph.el.textContent = glyph.hold ? randomScrambleChar() : glyph.char;
+                if (!glyph.hold) glyph.done = true;
             });
+            revealSettledLinks();
             if (ruleEl) {
                 ruleEl.style.opacity = '1';
                 ruleEl.style.clipPath = '';
@@ -213,6 +283,20 @@ export function createTextReveal({
         }
 
         const t0 = performance.now();
+        const lineSettled = new Set();
+        const noteLineSettled = (source, elapsed) => {
+            if (!debug || !source || lineSettled.has(source)) return;
+            const pendingLine = glyphs.some((item) => (
+                item.source === source && !item.hold && !item.done
+            ));
+            if (pendingLine) return;
+            lineSettled.add(source);
+            console.info('[panel-timing]', {
+                kind: debugLabel || '',
+                line: source.className,
+                settleMs: Math.round(elapsed * 10) / 10,
+            });
+        };
         const tick = (now) => {
             raf = 0;
             const elapsed = now - t0;
@@ -230,6 +314,8 @@ export function createTextReveal({
                         glyph.done = true;
                         glyph.el.style.opacity = '1';
                         if (glyph.el.textContent !== glyph.char) glyph.el.textContent = glyph.char;
+                        if (glyph.link) revealSettledLinks();
+                        noteLineSettled(glyph.source, elapsed);
                     }
                     continue;
                 }

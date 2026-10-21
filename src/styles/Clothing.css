@@ -299,6 +299,15 @@
     margin-bottom: 0;
 }
 
+.stream-panel-copy {
+    width: 100%;
+}
+
+.stream-panel.is-compact:not(.is-below) .stream-panel-copy {
+    width: fit-content;
+    max-width: 100%;
+}
+
 .stream-panel.is-leaving {
     transition-duration: var(--panel-out-ms, 150ms);
 }
@@ -363,6 +372,51 @@
 
 .stream-panel-text {
     margin: 0;
+}
+
+.stream-panel-text em {
+    font-style: italic;
+}
+
+.stream-panel-links {
+    margin-top: 3.2em;
+}
+
+.stream-panel-year[hidden],
+.stream-panel-details[hidden],
+.stream-panel-rule[hidden],
+.stream-panel-text[hidden],
+.stream-panel-links[hidden] {
+    display: none;
+}
+
+.stream-panel-link {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    line-height: inherit;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+    cursor: pointer;
+    pointer-events: none;
+}
+
+.stream-panel-link.is-ready {
+    pointer-events: auto;
+}
+
+.stream-panel-link:hover {
+    text-decoration-thickness: 2px;
+}
+
+.stream-panel-link:focus-visible {
+    outline: 1px solid currentColor;
+    outline-offset: 3px;
+    text-decoration-thickness: 2px;
 }
 
 .stream-close {

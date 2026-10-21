@@ -4,7 +4,7 @@ import '../styles/Header.css';
 import '../styles/Clothing.css';
 import photoManifest from '../data/photo-manifest.json';
 import photoInfo from '../data/photo-info.json';
-import { createTextReveal } from '../utils/textReveal';
+import { createTextReveal, setMarkedText } from '../utils/textReveal';
 
 const ASPECT_BY_NUMBER = new Map(
     photoManifest.map((entry) => [entry.number, entry.aspect])
@@ -30,12 +30,6 @@ const GALLERY_SWEEP_MS = 620;
 const GALLERY_CHAR_MIN_MS = 160;
 const GALLERY_CHAR_EXTRA_MS = 140;
 const GALLERY_TEXT_OUT_MS = 150;
-const GALLERY_DETAILS_PLACEHOLDER = 'Lorem ipsum · Dolor sit';
-const GALLERY_TEXT_PLACEHOLDER =
-    'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
-    + 'tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim '
-    + 'veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea '
-    + 'commodo. Duis aute irure dolor in reprehenderit in voluptate velit esse.';
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -120,9 +114,8 @@ const CAPTION_RESERVE_PX = CAPTION_GAP_PX + Math.ceil(CAPTION_MAX_FONT_PX * 1.3)
 // ---------------------------------------------------------------------------
 const PHOTO_COUNT = 194;
 const PHOTO_DIR = '/photos/Website digital/Photography';
-// 4, 47, 50 and 78 are held out on purpose.
-// 116's Large long edge is 1746px, not ~2000.
-const EXCLUDED_PHOTOS = [4, 47, 50, 78, 116];
+// 4, 47, 50, 78, 110 and 126 are held out on purpose.
+const EXCLUDED_PHOTOS = [4, 47, 50, 78, 110, 126];
 // Skip numbers that are missing from small or Large (177 has neither file).
 const MISSING_PHOTOS = [177];
 
@@ -144,6 +137,11 @@ const HEADER_TO_ROW_GAP_PX = 18;
 function photoLabelFor(spec) {
     const info = spec && spec.number != null ? photoInfo[spec.number] : null;
     return info && info.title ? info : null;
+}
+
+function photoHasDescription(spec) {
+    const info = photoLabelFor(spec);
+    return !!(info && String(info.description || '').trim());
 }
 
 function photoNumberInPath(src) {
@@ -563,7 +561,8 @@ function Clothing() {
         const decodePromises = new Map();
         const decodedSpecs = new Map();
         const decodedOrder = [];
-        const introTimers = [];
+        const introSchedule = [];
+        let introElapsed = 0;
         const introEntering = new Set();
         const startedRows = new Set();
         const rowPending = new Set();
@@ -711,17 +710,23 @@ function Clothing() {
         panel.style.setProperty('--panel-out-ms', `${GALLERY_TEXT_OUT_MS}ms`);
         const panelInner = document.createElement('div');
         panelInner.className = 'stream-panel-inner';
+        const panelCopy = document.createElement('div');
+        panelCopy.className = 'stream-panel-copy';
         const panelTitle = document.createElement('i');
         panelTitle.className = 'stream-panel-title';
         const panelYear = document.createElement('div');
         panelYear.className = 'stream-panel-year';
         const panelDetails = document.createElement('div');
         panelDetails.className = 'stream-panel-details';
+        panelCopy.append(panelTitle, panelYear, panelDetails);
         const panelRule = document.createElement('div');
         panelRule.className = 'stream-panel-rule';
         const panelText = document.createElement('p');
         panelText.className = 'stream-panel-text';
-        panelInner.append(panelTitle, panelYear, panelDetails, panelRule, panelText);
+        const panelLinks = document.createElement('div');
+        panelLinks.className = 'stream-panel-links';
+        panelLinks.hidden = true;
+        panelInner.append(panelCopy, panelRule, panelText, panelLinks);
         panel.append(panelInner);
 
         document.body.append(overlay, closeBtn, caption);
@@ -1709,8 +1714,22 @@ function Clothing() {
 
         const panelGeometry = (box) => {
             if (!GALLERY_PANEL_ENABLED) return null;
-            const { beside, groupLeft, border, inner, endLeft, endTop, bandBottom } = box;
+            const { beside, hasDesc, groupLeft, border, inner, endLeft, endTop, bandBottom } = box;
             if (beside) {
+                if (!hasDesc) {
+                    const frameLeft = endLeft - border;
+                    const maxWidth = Math.max(80, frameLeft - GALLERY_PANEL_GAP_PX - 8);
+                    return {
+                        beside: true,
+                        compact: true,
+                        frameLeft,
+                        maxWidth,
+                        left: Math.max(8, frameLeft - GALLERY_PANEL_GAP_PX - maxWidth),
+                        top: endTop - border,
+                        width: maxWidth,
+                        height: inner.height + border * 2,
+                    };
+                }
                 // Spans the photo's height; the text inside sits at the bottom.
                 return {
                     beside: true,
@@ -1738,7 +1757,9 @@ function Clothing() {
             const aspect = viewerAspect(spec, slot);
             const reserve = bottomReservePx();
             const beside = panelBeside();
-            const sideCost = beside ? panelWidthPx() + GALLERY_PANEL_GAP_PX : 0;
+            const hasDesc = photoHasDescription(spec);
+            const sidePanel = beside && hasDesc;
+            const sideCost = sidePanel ? panelWidthPx() + GALLERY_PANEL_GAP_PX : 0;
             const border = viewerBorderPx();
             const firstTop = restFirstTop;
             const count = Math.max(1, pageRowCount);
@@ -1771,7 +1792,7 @@ function Clothing() {
                 (window.innerWidth - (totalW + sideCost)) / 2
             );
             const centerLeft = (window.innerWidth - inner.width) / 2;
-            const endLeft = beside ? groupLeft + sideCost + border : centerLeft;
+            const endLeft = sidePanel ? groupLeft + sideCost + border : centerLeft;
             let standardEndTop = visibleTop + Math.max(0, maxTotalH - totalH) / 2 + border;
             const minEndTop = Math.ceil(
                 Math.max(VIEWER_GAP_PX, headerEl()?.getBoundingClientRect().bottom || 0)
@@ -1791,8 +1812,10 @@ function Clothing() {
                 endTop,
                 centerLeft,
                 standardEndTop,
+                hasDesc,
                 panel: panelGeometry({
                     beside,
+                    hasDesc,
                     groupLeft,
                     border,
                     inner,
@@ -2145,15 +2168,52 @@ function Clothing() {
             charExtraMs: GALLERY_CHAR_EXTRA_MS,
         });
 
-        const panelTextEls = () => [panelTitle, panelYear, panelDetails, panelText];
+        const panelLinkEls = () => [...panelLinks.querySelectorAll('a')];
 
-        const panelHoldEls = () =>
-            [panelDetails, panelText].filter((el) => el.dataset.scrambleHold === '1');
+        const panelFieldEls = () => [
+            panelTitle,
+            panelYear,
+            panelDetails,
+            panelText,
+            ...panelLinkEls(),
+        ].filter(Boolean);
+
+        const panelTextEls = () => panelFieldEls().filter((el) => (
+            el && !el.hidden && el.textContent
+        ));
+
+        const resetPanelFieldChrome = () => {
+            panelFieldEls().forEach((el) => {
+                el.style.visibility = '';
+                el.removeAttribute('aria-hidden');
+                el.classList.remove('is-spacer', 'is-ready');
+            });
+            panelRule.style.visibility = '';
+            panelRule.style.opacity = '';
+            panelRule.style.clipPath = '';
+            panelRule.classList.remove('is-spacer');
+            panelRule.removeAttribute('aria-hidden');
+        };
+
+        const markPanelLinksReady = () => {
+            panelLinkEls().forEach((el) => {
+                el.style.visibility = '';
+                el.classList.add('is-ready');
+                el.dataset.revealReady = '1';
+                el.removeAttribute('tabindex');
+            });
+        };
 
         const panelRevealArgs = () => ({
             container: panel,
             textEls: panelTextEls(),
-            holdEls: panelHoldEls(),
+            ruleEl: panelRule.hidden ? null : panelRule,
+            innerEl: panelInner,
+        });
+
+        const panelClearArgs = () => ({
+            container: panel,
+            textEls: panelFieldEls(),
             ruleEl: panelRule,
             innerEl: panelInner,
         });
@@ -2163,16 +2223,21 @@ function Clothing() {
         };
 
         const clearPanelReveal = () => {
-            panelReveal.clear(panelRevealArgs());
+            panelReveal.clear(panelClearArgs());
+            resetPanelFieldChrome();
         };
 
         const startPanelReveal = () => {
             if (!GALLERY_PANEL_ENABLED || panel.hidden) return;
-            panelReveal.start({
+            resetPanelFieldChrome();
+            const started = panelReveal.start({
                 ...panelRevealArgs(),
                 reducedMotion,
                 debug: process.env.NODE_ENV !== 'production',
+                debugLabel: photoHasDescription(viewer && viewer.spec) ? 'described' : 'compact',
+                sweepWidth: panelWidthPx(),
             });
+            if (!started || reducedMotion) markPanelLinksReady();
         };
 
         // On open and on switch the panel drops out without a fade, so the new
@@ -2194,12 +2259,33 @@ function Clothing() {
             const info = photoLabelFor(spec);
             const details = info && String(info.details || '').trim();
             const description = info && String(info.description || '').trim();
-            panelTitle.textContent = info ? info.title : '';
+            const links = info && Array.isArray(info.links) ? info.links : [];
+            resetPanelFieldChrome();
+            setMarkedText(panelTitle, info ? info.title : '');
             panelYear.textContent = info && info.year ? info.year : '';
-            panelDetails.textContent = details || GALLERY_DETAILS_PLACEHOLDER;
-            panelText.textContent = description || GALLERY_TEXT_PLACEHOLDER;
-            panelDetails.dataset.scrambleHold = details ? '' : '1';
-            panelText.dataset.scrambleHold = description ? '' : '1';
+            panelYear.hidden = !(info && info.year);
+            setMarkedText(panelDetails, details);
+            panelDetails.hidden = !details;
+            setMarkedText(panelText, description);
+            panelText.hidden = !description;
+            panelRule.hidden = !description;
+            panelLinks.replaceChildren();
+            links.forEach((link) => {
+                if (!link || !link.url || !link.text) return;
+                const anchor = document.createElement('a');
+                anchor.className = 'stream-panel-link';
+                anchor.href = link.url;
+                anchor.target = '_blank';
+                anchor.rel = 'noopener noreferrer';
+                anchor.textContent = link.text;
+                anchor.tabIndex = -1;
+                anchor.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                });
+                panelLinks.append(anchor);
+            });
+            panelLinks.hidden = !panelLinks.childNodes.length;
+            panel.classList.remove('is-copy-shift', 'is-copy-only');
             panel.hidden = !info;
             panel.scrollTop = 0;
         };
@@ -2207,10 +2293,27 @@ function Clothing() {
         // Parked at the flyer's resting place, like the caption.
         const placePanel = (layout) => {
             if (!GALLERY_PANEL_ENABLED || panel.hidden || !layout?.panel) return;
-            const box = layout.panel;
+            let box = layout.panel;
             panel.classList.toggle('is-below', !box.beside);
-            panel.style.width = `${Math.round(box.width)}px`;
+            panel.classList.toggle('is-compact', !!box.compact);
             panel.style.height = `${Math.round(box.height)}px`;
+            if (box.compact) {
+                panel.style.width = `${Math.round(box.maxWidth)}px`;
+                panel.style.transform =
+                    `translate3d(${Math.round(box.left)}px, ${Math.round(box.top)}px, 0)`;
+                void panel.offsetWidth;
+                const copyW = Math.ceil(Math.max(
+                    panelCopy.getBoundingClientRect().width,
+                    panelTitle.getBoundingClientRect().width,
+                    panelYear.hidden ? 0 : panelYear.getBoundingClientRect().width,
+                    panelDetails.hidden ? 0 : panelDetails.getBoundingClientRect().width
+                ));
+                const width = Math.min(box.maxWidth, Math.max(copyW, 1));
+                const left = Math.max(8, Math.round(box.frameLeft - GALLERY_PANEL_GAP_PX - width));
+                box = { ...box, width, left };
+                layout.panel = box;
+            }
+            panel.style.width = `${Math.round(box.width)}px`;
             panel.style.transform =
                 `translate3d(${Math.round(box.left)}px, ${Math.round(box.top)}px, 0)`;
         };
@@ -2730,6 +2833,7 @@ function Clothing() {
             hidePanelInstantly();
             setPanelText(spec);
             placePanel(layout);
+            viewer.hiddenRows = hiddenRowsFor(layout);
             clipOverlayToHeader();
             overlay.hidden = false;
             overlay.style.pointerEvents = '';
@@ -2843,6 +2947,7 @@ function Clothing() {
             hidePanelInstantly();
             setPanelText(spec);
             placePanel(layout);
+            viewer.hiddenRows = hiddenRowsFor(layout);
             node.root.hidden = false;
             sizeFlyer(node, layout);
             if (!viewer.largeReady) armLarge(node, spec);
@@ -3034,7 +3139,9 @@ function Clothing() {
         };
 
         const packRow = (rowIndex, fromRight) => {
-            if (layoutWritesQuiet() || rowLayoutQuiet(rowIndex)) return;
+            if (rowLayoutQuiet(rowIndex)) return;
+            const introPack = fromRight === true || introEntering.has(rowIndex);
+            if (layoutWritesQuiet() && !introPack) return;
             runAsWriter('packRow', () => {
                 const mine = pool
                     .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
@@ -3221,7 +3328,8 @@ function Clothing() {
         const startRow = (rowIndex, mode) => {
             const rowEl = rows[rowIndex];
             if (cancelled || !rowEl) return Promise.resolve();
-            if (layoutWritesQuiet()) {
+            const introStart = mode === 'enter-left';
+            if (!introStart && layoutWritesQuiet()) {
                 window.setTimeout(() => {
                     if (cancelled) return;
                     if (startedRows.has(rowIndex) && pool.some((slot) => slot.row === rowIndex && slotIsLive(slot))) {
@@ -3305,6 +3413,7 @@ function Clothing() {
                     });
                 }
                 rowEl.style.visibility = '';
+                if (viewer) applyRows(viewer.rowAmount || 0);
                 scheduleUpcoming();
                 syncPlayback();
             })();
@@ -3543,16 +3652,24 @@ function Clothing() {
             if (introPlan.has(index) || startedRows.has(index)) return;
             introPlan.add(index);
             introNextAt = Math.max(introNextAt, at + INTRO_MIN_GAP_SECONDS);
-            const delay = Math.max(0, at * 1000 - (performance.now() - pageStartedAt));
-            const timer = window.setTimeout(() => {
-                if (cancelled || !introPlan.has(index)) return;
-                if (!rows[index]) {
+            introSchedule.push({ index, at });
+        };
+
+        const pumpIntro = (dt) => {
+            if (!introSchedule.length || !(dt > 0)) return;
+            introElapsed += dt;
+            while (introSchedule.length && introSchedule[0].at <= introElapsed) {
+                const item = introSchedule[0];
+                const { index } = item;
+                if (cancelled || !introPlan.has(index) || startedRows.has(index)) {
+                    introSchedule.shift();
                     introPlan.delete(index);
-                    return;
+                    continue;
                 }
+                if (!rows[index]) break;
+                introSchedule.shift();
                 startRow(index, 'enter-left');
-            }, delay);
-            introTimers.push(timer);
+            }
         };
 
         const outlineFor = (slot) => {
@@ -3724,9 +3841,14 @@ function Clothing() {
 
         const tick = (now) => {
             if (!running) return;
+            if (document.hidden) {
+                pause();
+                return;
+            }
             positionWriter = 'tick';
             const dt = lastTime ? Math.min(MAX_FRAME_SECONDS, (now - lastTime) / 1000) : 0;
             lastTime = now;
+            pumpIntro(dt);
             const closing = viewer && viewer.phase === 'closing';
             if (!closing) purgeDeadSlots();
 
@@ -3773,7 +3895,7 @@ function Clothing() {
         const play = () => {
             if (running) return;
             if (!inView || document.hidden) return;
-            if (!pool.length && !viewer) return;
+            if (!pool.length && !viewer && !introSchedule.length) return;
             if (reducedMotion && REDUCED_MOTION_SPEED_SCALE === 0 && !viewer) return;
             running = true;
             lastTime = 0;
@@ -3789,16 +3911,16 @@ function Clothing() {
 
         const syncPlayback = () => {
             const motionFrozen = reducedMotion && REDUCED_MOTION_SPEED_SCALE === 0;
-            if (inView && !document.hidden && (viewer || (pool.length && !motionFrozen))) {
+            const introPending = introSchedule.length > 0;
+            if (inView && !document.hidden && (viewer || introPending || (pool.length && !motionFrozen))) {
                 play();
             } else {
                 pause();
             }
         };
 
-        const clearIntroTimers = () => {
-            introTimers.forEach((id) => window.clearTimeout(id));
-            introTimers.length = 0;
+        const clearIntroSchedule = () => {
+            introSchedule.length = 0;
         };
 
         overlay.addEventListener('click', (event) => {
@@ -3819,8 +3941,9 @@ function Clothing() {
             closeViewer();
         });
         // Acts like the overlay, except while text in it is selected.
-        panel.addEventListener('click', () => {
+        panel.addEventListener('click', (event) => {
             if (!viewer) return;
+            if (event.target.closest('a')) return;
             const selection = window.getSelection();
             if (selection && !selection.isCollapsed) return;
             closeViewer();
@@ -3847,10 +3970,12 @@ function Clothing() {
             const decodeOrder = schedule.flatMap(({ index }) => rowAssignments.get(index) || []);
             mapWithConcurrency(decodeOrder, DECODE_CONCURRENCY, decodeSmall);
             schedule.forEach((item) => scheduleIntroRow(item.index, item.at));
+            introSchedule.sort((a, b) => a.at - b.at);
             introNextAt =
                 (schedule[schedule.length - 1]?.at || INTRO_FIRST_DELAY_SECONDS) +
                 INTRO_MIN_GAP_SECONDS;
             mountRange();
+            syncPlayback();
         } else {
             section.style.visibility = 'hidden';
             holdMotion = true;
@@ -3988,7 +4113,7 @@ function Clothing() {
         return () => {
             cancelled = true;
             window.clearInterval(repairTimer);
-            clearIntroTimers();
+            clearIntroSchedule();
             pause();
             intersection.disconnect();
             document.removeEventListener('visibilitychange', onVisibility);
