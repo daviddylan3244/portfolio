@@ -8,7 +8,7 @@ import {
   SCRAMBLE_EXTRA_MS as EXTRA_SCRAMBLE_MS,
 } from '../utils/decrypt';
 
-const SITE_VERSION = 'v0.9.4';
+const SITE_VERSION = 'v0.9.5';
 
 function useDecryptedText(text, { animate, delay = 0, onComplete }) {
   const [display, setDisplay] = useState(animate ? '' : text);
