@@ -3,12 +3,12 @@
     "title": "3D Design",
     "cardShape": "square",
     "items": [
-      { "type": "image", "src": "/Product-design/3d-Design1.1.png", "title": "", "date": "", "description": "", "width": 1129, "height": 994 },
-      { "type": "image", "src": "/Product-design/3d-Design1.2.png", "title": "", "date": "", "description": "", "width": 1216, "height": 996 },
-      { "type": "image", "src": "/Product-design/3d-Design2.1.png", "title": "", "date": "", "description": "", "width": 1236, "height": 910 },
-      { "type": "image", "src": "/Product-design/3d-Design2.2.png", "title": "", "date": "", "description": "", "width": 1228, "height": 924 },
-      { "type": "image", "src": "/Product-design/3d-Design3.1.png", "title": "", "date": "", "description": "", "width": 1356, "height": 946 },
-      { "type": "image", "src": "/Product-design/3d-Design3.2.png", "title": "", "date": "", "description": "", "width": 1290, "height": 880 }
+      { "type": "image", "src": "/Product-design/3d-Design1.1.png", "title": "Adaptive Wall Hook", "date": "", "description": "Instead of buying 3M Command hooks, I designed and 3D-printed my own. Over several iterations, I varied the size and grip strength so each version handles a different load, from keys and hats to bags, sweaters, and jackets. The project taught me to prototype quickly and refine a design through real-world use.", "width": 1129, "height": 994 },
+      { "type": "image", "src": "/Product-design/3d-Design1.2.png", "title": "Adaptive Wall Hook", "date": "", "description": "Instead of buying 3M Command hooks, I designed and 3D-printed my own. Over several iterations, I varied the size and grip strength so each version handles a different load, from keys and hats to bags, sweaters, and jackets. The project taught me to prototype quickly and refine a design through real-world use.", "width": 1216, "height": 996 },
+      { "type": "image", "src": "/Product-design/3d-Design2.1.png", "title": "Coin Sorter Insert", "date": "", "description": "One part of a larger coin-sorting assembly. It uses the size differences between U.S. coins to separate a mixed pile, and sorted coins drop through the bottom into individual bins. The tight tolerances made it the hardest piece to design and print, and it took several iterations and different print techniques to get right.", "width": 1236, "height": 910 },
+      { "type": "image", "src": "/Product-design/3d-Design2.2.png", "title": "Coin Sorter Insert", "date": "", "description": "One part of a larger coin-sorting assembly. It uses the size differences between U.S. coins to separate a mixed pile, and sorted coins drop through the bottom into individual bins. The tight tolerances made it the hardest piece to design and print, and it took several iterations and different print techniques to get right.", "width": 1228, "height": 924 },
+      { "type": "image", "src": "/Product-design/3d-Design3.1.png", "title": "Rail Shelf", "date": "", "description": "A small shelf printed to fit precisely between sectioned bars, creating storage where there wasn't any. I printed it at 40% infill with a specialized infill pattern, keeping it light while still stiff enough to hold weight without flexing.", "width": 1356, "height": 946 },
+      { "type": "image", "src": "/Product-design/3d-Design3.2.png", "title": "Rail Shelf", "date": "", "description": "A small shelf printed to fit precisely between sectioned bars, creating storage where there wasn't any. I printed it at 40% infill with a specialized infill pattern, keeping it light while still stiff enough to hold weight without flexing.", "width": 1290, "height": 880 }
     ]
   },
   {
@@ -17,9 +17,9 @@
     "cardAspect": 1.5,
     "fit": "cover",
     "items": [
-      { "type": "image", "src": "/Product-design/Graphic-Design1.jpg", "title": "", "date": "", "description": "", "width": 2000, "height": 1333 },
-      { "type": "image", "src": "/Product-design/Graphic-Design2.jpg", "title": "", "date": "", "description": "", "width": 2000, "height": 1333 },
-      { "type": "image", "src": "/Product-design/Graphic-Design5.jpg", "title": "", "date": "", "description": "", "width": 2000, "height": 1499 }
+      { "type": "image", "src": "/Product-design/Graphic-Design1.jpg", "title": "Corona Pro Surf Circuit", "date": "October 2024", "description": "A submission to an open call from the Corona Pro Surf Circuit in Isabela, Puerto Rico, which invited locally made ads that fit the brand. I hand-built the lettering to give the poster a homemade, local feel while staying true to Corona's identity.", "width": 2000, "height": 1333 },
+      { "type": "image", "src": "/Product-design/Graphic-Design2.jpg", "title": "RunBoston", "date": "", "description": "A class project to create ads for local Boston small businesses. RunBoston is a real company, but this piece was not commissioned by them. I shot the photography myself and designed the ad to fit within their existing visual identity.", "width": 2000, "height": 1333 },
+      { "type": "image", "src": "/Product-design/Graphic-Design5.jpg", "title": "In The Bite", "date": "", "description": "A quick piece made as a favor for a friend launching his brand, In The Bite. I paired one of my earlier drone photographs with his logo to give his new Instagram some early content: simple, fast, and built to fit the brand.", "width": 2000, "height": 1499 }
     ]
   },
   {
@@ -27,17 +27,17 @@
     "cardShape": "natural",
     "frame": "thin-white",
     "items": [
-      { "type": "image", "src": "/Product-design/MTPro1.png", "title": "", "date": "", "description": "", "width": 1174, "height": 1024 },
-      { "type": "image", "src": "/Product-design/MTPro2.png", "title": "", "date": "", "description": "", "width": 1056, "height": 986 },
-      { "type": "image", "src": "/Product-design/MTPro3.png", "title": "", "date": "", "description": "", "width": 1093, "height": 941 }
+      { "type": "image", "src": "/Product-design/MTPro1.png", "title": "Mesh Enclosure", "date": "", "description": "Blueprints for extruded-aluminum structures, created with Sidex Suministros while I trained on MTPro, the company's design software. Working with their actual product stock taught me how a design becomes a buildable, sellable assembly. These were training exercises and were likely never built.", "width": 1174, "height": 1024 },
+      { "type": "image", "src": "/Product-design/MTPro2.png", "title": "Shelving Frame", "date": "", "description": "Blueprints for extruded-aluminum structures, created with Sidex Suministros while I trained on MTPro, the company's design software. Working with their actual product stock taught me how a design becomes a buildable, sellable assembly. These were training exercises and were likely never built.", "width": 1056, "height": 986 },
+      { "type": "image", "src": "/Product-design/MTPro3.png", "title": "Utility Cart", "date": "", "description": "Blueprints for extruded-aluminum structures, created with Sidex Suministros while I trained on MTPro, the company's design software. Working with their actual product stock taught me how a design becomes a buildable, sellable assembly. These were training exercises and were likely never built.", "width": 1093, "height": 941 }
     ]
   },
   {
     "title": "Billboard Design",
     "cardShape": "natural",
     "items": [
-      { "type": "image", "src": "/Product-design/Graphic-Design3.png", "title": "", "date": "", "description": "", "width": 1363, "height": 337 },
-      { "type": "image", "src": "/Product-design/Graphic-Design4.png", "title": "", "date": "", "description": "", "width": 1108, "height": 274 }
+      { "type": "image", "src": "/Product-design/Graphic-Design3.png", "title": "GOYA Puerto Rico I", "date": "", "description": "Commissioned by GOYA Puerto Rico through Billboard Media Group. I developed the design over several rounds of revisions with the client until it was approved, and the final billboard ran for two years.", "width": 1363, "height": 337 },
+      { "type": "image", "src": "/Product-design/Graphic-Design4.png", "title": "GOYA Puerto Rico II", "date": "", "description": "A second design from the same commission, printed as a large-format vinyl billboard. I also helped raise and secure it in place, seeing the project through from screen to street.", "width": 1108, "height": 274 }
     ]
   }
 ]

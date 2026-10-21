@@ -21,6 +21,7 @@ export function createTextReveal({
     let raf = 0;
     let glyphs = [];
     let overlay = null;
+    let srLabel = null;
 
     const stop = () => {
         if (!raf) return;
@@ -35,8 +36,14 @@ export function createTextReveal({
             overlay.remove();
             overlay = null;
         }
+        if (srLabel) {
+            srLabel.remove();
+            srLabel = null;
+        }
         (textEls || []).forEach((el) => {
-            if (el) el.style.visibility = '';
+            if (!el) return;
+            el.style.visibility = '';
+            el.removeAttribute('aria-hidden');
         });
         if (ruleEl) {
             ruleEl.style.opacity = '';
@@ -49,21 +56,34 @@ export function createTextReveal({
     const start = ({
         container,
         textEls,
+        holdEls,
         ruleEl,
         innerEl,
         reducedMotion,
         debug,
     } = {}) => {
         clear({ container, textEls, ruleEl, innerEl });
-        if (!container || reducedMotion) return false;
+        if (!container) return false;
         const els = (textEls || []).filter(Boolean);
+        const holdSet = new Set((holdEls || []).filter(Boolean));
         if (!els.length) return false;
+        if (reducedMotion && !holdSet.size) return false;
 
-        container.setAttribute(
-            'aria-label',
-            els.map((el) => el.textContent).filter(Boolean).join('. ')
-        );
+        const spoken = els
+            .filter((el) => !holdSet.has(el) && el.textContent)
+            .map((el) => el.textContent);
+        if (holdSet.size) spoken.push('Description coming soon');
+        if (spoken.length) container.setAttribute('aria-label', spoken.join('. '));
 
+        if (holdSet.size) {
+            srLabel = document.createElement('span');
+            srLabel.className = 'stream-panel-sr';
+            srLabel.textContent = 'Description coming soon';
+            container.append(srLabel);
+            holdSet.forEach((el) => el.setAttribute('aria-hidden', 'true'));
+        }
+
+        const overlayEls = reducedMotion ? els.filter((el) => holdSet.has(el)) : els;
         const base = container.getBoundingClientRect();
         const nextOverlay = document.createElement('div');
         nextOverlay.className = overlayClass;
@@ -73,7 +93,7 @@ export function createTextReveal({
         const layers = [];
         let maxX = 1;
 
-        els.forEach((el) => {
+        overlayEls.forEach((el) => {
             const node = el.firstChild;
             if (!node || node.nodeType !== 3 || !node.nodeValue) return;
             const text = node.nodeValue;
@@ -99,7 +119,16 @@ export function createTextReveal({
                 glyph.style.lineHeight = `${rect.height}px`;
                 glyph.style.opacity = '0';
                 layer.append(glyph);
-                nextGlyphs.push({ el: glyph, char, x, start: 0, end: 0, tick: -1, done: false });
+                nextGlyphs.push({
+                    el: glyph,
+                    char,
+                    x,
+                    start: 0,
+                    end: 0,
+                    tick: -1,
+                    done: false,
+                    hold: holdSet.has(el),
+                });
                 if (x > maxX) maxX = x;
                 if (!probe) probe = { glyph, rect, label: el.className };
             }
@@ -109,6 +138,10 @@ export function createTextReveal({
         });
 
         if (!nextGlyphs.length) {
+            if (srLabel) {
+                srLabel.remove();
+                srLabel = null;
+            }
             container.removeAttribute('aria-label');
             return false;
         }
@@ -122,10 +155,10 @@ export function createTextReveal({
         const checked = debug
             ? { scrollHeight: container.scrollHeight, innerTop: innerEl?.getBoundingClientRect().top }
             : null;
-        els.forEach((el) => {
+        overlayEls.forEach((el) => {
             el.style.visibility = 'hidden';
         });
-        if (innerEl) innerEl.setAttribute('aria-hidden', 'true');
+        if (innerEl && !reducedMotion) innerEl.setAttribute('aria-hidden', 'true');
         container.append(nextOverlay);
 
         const report = [];
@@ -167,31 +200,48 @@ export function createTextReveal({
             ruleEl.style.clipPath = 'inset(0 100% 0 0)';
         }
 
+        if (reducedMotion) {
+            glyphs.forEach((glyph) => {
+                glyph.el.style.opacity = '1';
+                glyph.el.textContent = glyph.hold ? randomScrambleChar() : glyph.char;
+            });
+            if (ruleEl) {
+                ruleEl.style.opacity = '1';
+                ruleEl.style.clipPath = '';
+            }
+            return true;
+        }
+
         const t0 = performance.now();
         const tick = (now) => {
             raf = 0;
             const elapsed = now - t0;
             let pending = 0;
+            let holding = 0;
             for (let i = 0; i < glyphs.length; i += 1) {
                 const glyph = glyphs[i];
-                if (glyph.done) continue;
+                if (glyph.hold) holding += 1;
                 if (elapsed < glyph.start) {
                     pending += 1;
                     continue;
                 }
-                if (elapsed >= glyph.end) {
-                    glyph.done = true;
-                    glyph.el.style.opacity = '1';
-                    if (glyph.el.textContent !== glyph.char) glyph.el.textContent = glyph.char;
+                if (elapsed >= glyph.end && !glyph.hold) {
+                    if (!glyph.done) {
+                        glyph.done = true;
+                        glyph.el.style.opacity = '1';
+                        if (glyph.el.textContent !== glyph.char) glyph.el.textContent = glyph.char;
+                    }
                     continue;
                 }
-                pending += 1;
-                const amount = (elapsed - glyph.start) / (glyph.end - glyph.start);
-                glyph.el.style.opacity = amount.toFixed(2);
+                if (elapsed < glyph.end) pending += 1;
+                const amount = Math.min(1, (elapsed - glyph.start) / (glyph.end - glyph.start));
+                if (glyph.el.style.opacity !== '1') glyph.el.style.opacity = amount.toFixed(2);
                 const step = Math.floor((elapsed - glyph.start) / SCRAMBLE_START_INTERVAL_MS);
                 if (step !== glyph.tick) {
                     glyph.tick = step;
-                    glyph.el.textContent = randomScrambleChar();
+                    if (glyph.hold || elapsed < glyph.end) {
+                        glyph.el.textContent = randomScrambleChar();
+                    }
                 }
             }
             const sweep = Math.min(1, elapsed / sweepMs);
@@ -199,7 +249,7 @@ export function createTextReveal({
                 ruleEl.style.opacity = String(Math.min(1, elapsed / 150));
                 ruleEl.style.clipPath = `inset(0 ${((1 - sweep) * 100).toFixed(1)}% 0 0)`;
             }
-            if (!pending && sweep >= 1) {
+            if (!pending && sweep >= 1 && !holding) {
                 clear({ container, textEls: els, ruleEl, innerEl });
                 return;
             }

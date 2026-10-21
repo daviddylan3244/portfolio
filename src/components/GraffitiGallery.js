@@ -64,7 +64,7 @@ const cardClassNames = (stack, extra = []) => {
 const itemCopy = (item) => ({
     title: item?.title ? item.title : 'Untitled',
     date: item?.date ? item.date : '',
-    description: item?.description ? item.description : DETAIL_LOREM,
+    description: item?.description ? String(item.description).trim() : '',
 });
 
 const itemGridAspect = (stack, item) => {
@@ -1217,22 +1217,22 @@ const GraffitiGallery = () => {
         const container = copyRef.current;
         if (!copyVisible || detailIndex == null || !container) return undefined;
         const textEls = [titleRef.current, dateRef.current, textRef.current].filter(Boolean);
-        if (motion.reduced) {
-            revealRef.current.clear({ container, textEls });
-            return undefined;
-        }
+        const holdEls = copy && !copy.description && textRef.current
+            ? [textRef.current]
+            : [];
         const id = window.requestAnimationFrame(() => {
             revealRef.current.start({
                 container,
                 textEls,
-                reducedMotion: false,
+                holdEls,
+                reducedMotion: motion.reduced,
             });
         });
         return () => {
             window.cancelAnimationFrame(id);
             revealRef.current.clear({ container, textEls });
         };
-    }, [copyVisible, detailIndex, motion.reduced]);
+    }, [copyVisible, detailIndex, motion.reduced, copy?.description]);
 
     useEffect(() => () => {
         window.clearTimeout(leaveTimerRef.current);
@@ -1648,7 +1648,13 @@ const GraffitiGallery = () => {
                                         <div className="stack-detail-date" ref={dateRef}>{copy.date}</div>
                                     ) : null}
                                 </div>
-                                <p className="stack-detail-text" ref={textRef}>{copy.description}</p>
+                                <p
+                                    className="stack-detail-text"
+                                    ref={textRef}
+                                    aria-hidden={copy.description ? undefined : 'true'}
+                                >
+                                    {copy.description || DETAIL_LOREM}
+                                </p>
                             </div>
                         ) : null}
                     </div>

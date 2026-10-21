@@ -2147,9 +2147,13 @@ function Clothing() {
 
         const panelTextEls = () => [panelTitle, panelYear, panelDetails, panelText];
 
+        const panelHoldEls = () =>
+            [panelDetails, panelText].filter((el) => el.dataset.scrambleHold === '1');
+
         const panelRevealArgs = () => ({
             container: panel,
             textEls: panelTextEls(),
+            holdEls: panelHoldEls(),
             ruleEl: panelRule,
             innerEl: panelInner,
         });
@@ -2188,10 +2192,14 @@ function Clothing() {
         const setPanelText = (spec) => {
             if (!GALLERY_PANEL_ENABLED) return;
             const info = photoLabelFor(spec);
+            const details = info && String(info.details || '').trim();
+            const description = info && String(info.description || '').trim();
             panelTitle.textContent = info ? info.title : '';
             panelYear.textContent = info && info.year ? info.year : '';
-            panelDetails.textContent = (info && info.details) || GALLERY_DETAILS_PLACEHOLDER;
-            panelText.textContent = (info && info.description) || GALLERY_TEXT_PLACEHOLDER;
+            panelDetails.textContent = details || GALLERY_DETAILS_PLACEHOLDER;
+            panelText.textContent = description || GALLERY_TEXT_PLACEHOLDER;
+            panelDetails.dataset.scrambleHold = details ? '' : '1';
+            panelText.dataset.scrambleHold = description ? '' : '1';
             panel.hidden = !info;
             panel.scrollTop = 0;
         };
