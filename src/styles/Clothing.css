@@ -48,6 +48,7 @@
     overflow-y: visible;
     transform-origin: top center;
     contain: layout;
+    transition: none;
 }
 
 .floating-streams-row:last-child {

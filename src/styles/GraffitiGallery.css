@@ -216,8 +216,9 @@
 
 .stack-overlay-close {
     position: fixed;
-    right: 1.25rem;
-    top: 5.5rem;
+    left: 0;
+    top: 0;
+    right: auto;
     z-index: 7;
     width: 44px;
     height: 44px;
@@ -230,6 +231,7 @@
     line-height: 1;
     cursor: pointer;
     opacity: 0;
+    transform: translate3d(0, 0, 0);
     transition: opacity var(--chrome-fade-ms, 180ms) cubic-bezier(0.22, 1, 0.36, 1);
 }
 

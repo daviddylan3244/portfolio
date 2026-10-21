@@ -129,6 +129,107 @@ const lerpPose = (from, to, amount) => {
 
 const poseOr = (pose, fallback) => pose || fallback || { x: 0, y: 0, w: 1, h: 1, o: 1, role: 'grid' };
 
+const CLOSE_BTN = 44;
+const CLOSE_BTN_PAD = 8;
+const TITLE_TOP_REM = 5.5;
+const DETAIL_PROBE = process.env.NODE_ENV !== 'production';
+
+const predictedTitleBottom = (vw) => {
+    const rem = remPx();
+    const font = clamp(vw * 0.024, 1.2 * rem, 1.7 * rem);
+    return TITLE_TOP_REM * rem + font * 1.2;
+};
+
+const sameBox = (a, b) => (
+    !!a
+    && !!b
+    && Math.abs(a.x - b.x) < 0.01
+    && Math.abs(a.y - b.y) < 0.01
+    && Math.abs(a.w - b.w) < 0.01
+    && Math.abs(a.h - b.h) < 0.01
+);
+
+const remPx = () => {
+    if (typeof window === 'undefined') return 16;
+    const raw = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return Number.isFinite(raw) && raw > 0 ? raw : 16;
+};
+
+const closeGapFor = (vw) => Math.round(clamp((vw * 28) / 1440, 22, 36));
+
+const gridClosePose = (vw) => {
+    const rem = remPx();
+    return {
+        x: vw - 1.25 * rem - CLOSE_BTN,
+        y: 5.5 * rem,
+    };
+};
+
+const boxesOverlap = (a, b) => (
+    !!a
+    && !!b
+    && a.x < b.x + b.w
+    && a.x + a.w > b.x
+    && a.y < b.y + b.h
+    && a.y + a.h > b.y
+);
+
+const asBox = (rect) => {
+    if (!rect) return null;
+    if (rect.w != null) return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+    return {
+        x: rect.left,
+        y: rect.top,
+        w: rect.width,
+        h: rect.height,
+    };
+};
+
+const nudgeClear = (btn, box, minX, maxX, minY, maxY) => {
+    if (!boxesOverlap(btn, box)) return btn;
+    const options = [
+        { x: box.x + box.w + 2, y: btn.y },
+        { x: box.x - btn.w - 2, y: btn.y },
+        { x: btn.x, y: box.y + box.h + 2 },
+        { x: btn.x, y: box.y - btn.h - 2 },
+    ].map((option) => ({
+        x: clamp(option.x, minX, maxX),
+        y: clamp(option.y, minY, maxY),
+    }));
+    let best = btn;
+    let bestCost = Infinity;
+    options.forEach((option) => {
+        const cost = Math.abs(option.x - btn.x) + Math.abs(option.y - btn.y);
+        if (cost < bestCost && !boxesOverlap({ ...option, w: btn.w, h: btn.h }, box)) {
+            best = { ...btn, x: option.x, y: option.y };
+            bestCost = cost;
+        }
+    });
+    return best;
+};
+
+const detailClosePose = (hero, view, copy, title) => {
+    const { vw, vh } = view;
+    const gap = closeGapFor(vw);
+    const minX = CLOSE_BTN_PAD;
+    const maxX = vw - CLOSE_BTN_PAD - CLOSE_BTN;
+    const minY = CLOSE_BTN_PAD;
+    const maxY = vh - CLOSE_BTN_PAD - CLOSE_BTN;
+    let x = clamp(hero.x + hero.w + gap - CLOSE_BTN / 2, minX, maxX);
+    let y = clamp(hero.y - gap - CLOSE_BTN / 2, minY, maxY);
+    let btn = { x, y, w: CLOSE_BTN, h: CLOSE_BTN };
+    btn = nudgeClear(btn, { x: hero.x, y: hero.y, w: hero.w, h: hero.h }, minX, maxX, minY, maxY);
+    btn = nudgeClear(btn, asBox(copy), minX, maxX, minY, maxY);
+    btn = nudgeClear(btn, asBox(title), minX, maxX, minY, maxY);
+    return { x: btn.x, y: btn.y };
+};
+
+const closePoseFromPoses = (poses, view, copy, title) => {
+    const hero = poses?.find((pose) => pose && pose.role === 'hero');
+    if (!hero) return gridClosePose(view.vw);
+    return detailClosePose(hero, view, copy, title);
+};
+
 const gridMetrics = (width) => {
     if (width <= 640) return { cols: 2, gap: 18 };
     if (width <= 900) return { cols: 3, gap: 18 };
@@ -410,6 +511,7 @@ const GraffitiGallery = () => {
     const revealRef = useRef(null);
     const posesRef = useRef([]);
     const destRef = useRef([]);
+    const settledRef = useRef(null);
     const animRef = useRef(0);
     const busyRef = useRef(false);
     const busyTokenRef = useRef(0);
@@ -451,8 +553,8 @@ const GraffitiGallery = () => {
             vw,
             vh,
             margin: vw <= DETAIL_NARROW_PX ? 16 : 28,
-            titleBottom: head ? head.bottom : 128,
-            menuBottom: (nav ? nav.bottom : 94) + 10,
+            titleBottom: head && head.height > 1 ? head.bottom : predictedTitleBottom(vw),
+            menuBottom: (nav && nav.height > 1 ? nav.bottom : 94) + 10,
         };
     };
 
@@ -492,10 +594,110 @@ const GraffitiGallery = () => {
         }
     };
 
-    const applyAll = (visuals, dests) => {
+    const applyAll = (visuals, dests, skipRoles = null) => {
         visuals.forEach((visual, index) => {
-            applyVisual(cardRefs.current[index], visual, dests[index] || visual);
+            const dest = dests[index] || visual;
+            if (skipRoles && dest?.role && skipRoles.has(dest.role)) return;
+            applyVisual(cardRefs.current[index], visual, dest);
         });
+    };
+
+    const titleBox = () => asBox(headRef.current?.querySelector('.stack-overlay-title')?.getBoundingClientRect());
+
+    const placeClose = (pose) => {
+        const el = closeRef.current;
+        if (!el || !pose) return;
+        el.style.transform = `translate3d(${pose.x}px, ${pose.y}px, 0)`;
+    };
+
+    const syncClose = (poses, copy) => {
+        placeClose(closePoseFromPoses(poses, viewBox(), copy, titleBox()));
+    };
+
+    const applyBox = (el, box) => {
+        if (!el || !box) return;
+        el.style.left = `${box.x}px`;
+        el.style.top = `${box.y}px`;
+        el.style.width = `${box.w}px`;
+        el.style.height = `${box.h}px`;
+    };
+
+    const pinSettledHero = (layout = settledRef.current) => {
+        if (!layout?.poses) return;
+        const index = layout.poses.findIndex((pose) => pose && pose.role === 'hero');
+        if (index < 0) return;
+        applyVisual(cardRefs.current[index], layout.poses[index], layout.poses[index]);
+    };
+
+    const probeHero = (label, layout = settledRef.current) => {
+        if (!DETAIL_PROBE || !layout?.poses) return;
+        const index = layout.poses.findIndex((pose) => pose && pose.role === 'hero');
+        const dest = index >= 0 ? layout.poses[index] : null;
+        const el = index >= 0 ? cardRefs.current[index] : null;
+        if (!dest || !el) return;
+        const rect = el.getBoundingClientRect();
+        const edges = {
+            left: rect.left - dest.x,
+            top: rect.top - dest.y,
+            right: rect.right - (dest.x + dest.w),
+            bottom: rect.bottom - (dest.y + dest.h),
+        };
+        const max = Math.max(
+            Math.abs(edges.left),
+            Math.abs(edges.top),
+            Math.abs(edges.right),
+            Math.abs(edges.bottom)
+        );
+        const row = {
+            label,
+            stack: openDetail?.title,
+            index,
+            dest: { x: dest.x, y: dest.y, w: dest.w, h: dest.h },
+            actual: { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
+            edges,
+            max,
+        };
+        if (!window.__detailGrowProbe) window.__detailGrowProbe = [];
+        window.__detailGrowProbe.push(row);
+        if (max > 0.5) {
+            console.warn('[detail-grow] hero missed target', row);
+        }
+    };
+
+    const lockDetailLayout = (heroIndex, predicted) => {
+        const view = viewBox();
+        const layout = heroIndex == null
+            ? {
+                poses: computeGridLayout(openDetail, stageBox()),
+                copy: null,
+                rail: null,
+            }
+            : computeDetailLayout(openDetail, heroIndex, view);
+        settledRef.current = layout;
+        destRef.current = layout.poses;
+        railRef.current = layout.rail;
+        applyBox(copyRef.current, layout.copy);
+        const railWrap = railElRef.current?.parentElement;
+        if (railWrap && layout.rail) {
+            applyBox(railWrap, layout.rail);
+        }
+        if (
+            predicted
+            && layout.copy
+            && predicted.copy
+            && !sameBox(layout.copy, predicted.copy)
+        ) {
+            setCopyBox(layout.copy);
+        }
+        if (
+            predicted
+            && layout.rail
+            && predicted.rail
+            && !sameBox(layout.rail, predicted.rail)
+        ) {
+            setRailBox(layout.rail);
+        }
+        return layout;
     };
 
     const measurePilePoses = (stackIndex) => {
@@ -573,6 +775,9 @@ const GraffitiGallery = () => {
             el.style.clipPath = '';
             el.style.flex = '0 0 auto';
         });
+        const hero = destRef.current.find((pose) => pose && pose.role === 'hero');
+        if (hero) syncClose(destRef.current, copyBox);
+        else syncClose(destRef.current, null);
     };
 
     const updateRailCue = () => {
@@ -650,15 +855,29 @@ const GraffitiGallery = () => {
         const duration = extras.duration ?? DETAIL_MS;
         const veilFrom = extras.veilFrom;
         const veilTo = extras.veilTo;
+        const skipRoles = extras.skipRoles || null;
+        const view = viewBox();
+        const closeStart = extras.closeFrom
+            || closePoseFromPoses(from, view, extras.copyFrom, titleBox());
+        const closeEnd = extras.closeTo
+            || closePoseFromPoses(to, view, extras.copyTo, titleBox());
         const setVeil = (amount) => {
             if (!veilRef.current || veilFrom == null || veilTo == null) return;
             veilRef.current.style.opacity = String(lerp(veilFrom, veilTo, amount));
         };
+        const setClose = (amount) => {
+            placeClose({
+                x: lerp(closeStart.x, closeEnd.x, amount),
+                y: lerp(closeStart.y, closeEnd.y, amount),
+            });
+        };
         const safeFrom = to.map((pose, index) => poseOr(from[index], pose));
         const finish = () => {
             setVeil(1);
-            applyAll(to, to);
+            setClose(1);
+            applyAll(to, to, skipRoles);
             posesRef.current = to;
+            if (extras.probe) probeHero(extras.probe, { poses: to });
             onDone?.();
         };
         if (motion.reduced) {
@@ -666,7 +885,8 @@ const GraffitiGallery = () => {
             return;
         }
         setVeil(0);
-        applyAll(safeFrom, to);
+        setClose(0);
+        applyAll(safeFrom, to, skipRoles);
         posesRef.current = safeFrom;
         const t0 = performance.now();
         const tick = (now) => {
@@ -675,8 +895,9 @@ const GraffitiGallery = () => {
                 const amount = easeBezier(DETAIL_EASE, raw);
                 const next = safeFrom.map((pose, index) => lerpPose(pose, to[index], amount));
                 posesRef.current = next;
-                applyAll(next, to);
+                applyAll(next, to, skipRoles);
                 setVeil(amount);
+                setClose(amount);
                 if (raw < 1) {
                     animRef.current = requestAnimationFrame(tick);
                     return;
@@ -762,6 +983,7 @@ const GraffitiGallery = () => {
         setChromeOn(false);
         posesRef.current = [];
         destRef.current = [];
+        settledRef.current = null;
         pileRef.current = [];
         openedRef.current = false;
         busyTokenRef.current += 1;
@@ -786,6 +1008,8 @@ const GraffitiGallery = () => {
         const from = (measured.length ? measured : layout.poses)
             .map((pose, index) => poseOr(pose, layout.poses[index]));
         stopMotion();
+        destRef.current = layout.poses;
+        settledRef.current = layout;
         const token = armBusy();
         pendingJobRef.current = { from, layout, nextIndex, token };
         pendingPinRef.current = from;
@@ -880,6 +1104,7 @@ const GraffitiGallery = () => {
         if (motion.reduced) {
             applyAll(grid, grid);
             posesRef.current = grid;
+            syncClose(grid, null);
             if (veilRef.current) veilRef.current.style.opacity = '1';
             releaseBusy();
             return;
@@ -900,6 +1125,12 @@ const GraffitiGallery = () => {
     }, [isOpen, isLeaving]);
 
     useLayoutEffect(() => {
+        if (!openDetail || isLeaving || animRef.current) return;
+        const poses = destRef.current.length ? destRef.current : posesRef.current;
+        if (poses.length) syncClose(poses, inDetail ? copyBox : null);
+    }, [openDetail, isLeaving, inDetail, copyBox, chromeOn]);
+
+    useLayoutEffect(() => {
         if (pendingPinRef.current) {
             const pin = pendingPinRef.current;
             pendingPinRef.current = null;
@@ -915,22 +1146,28 @@ const GraffitiGallery = () => {
         const job = pendingJobRef.current;
         if (job) {
             pendingJobRef.current = null;
-            destRef.current = job.layout.poses;
-            applyAll(job.from, job.layout.poses);
-            runMotion(job.from, job.layout.poses, () => {
+            const layout = lockDetailLayout(job.nextIndex, job.layout);
+            destRef.current = layout.poses;
+            applyAll(job.from, layout.poses);
+            runMotion(job.from, layout.poses, () => {
                 if (!releaseBusy(job.token)) return;
+                pinSettledHero(layout);
+                probeHero(job.nextIndex != null ? 'grow-end' : 'grid-end', layout);
                 if (job.nextIndex != null) {
                     setThumbsDocked(true);
                     setCopyVisible(true);
                     return;
                 }
+                settledRef.current = layout;
                 setThumbsDocked(false);
                 setRailBox(null);
                 setRailCue(emptyRailCue);
                 railRef.current = null;
-                destRef.current = job.layout.poses;
-                posesRef.current = job.layout.poses;
-                applyAll(job.layout.poses, job.layout.poses);
+                destRef.current = layout.poses;
+                posesRef.current = layout.poses;
+                applyAll(layout.poses, layout.poses);
+            }, {
+                probe: job.nextIndex != null ? 'grow-frame' : null,
             });
             return;
         }
@@ -939,8 +1176,10 @@ const GraffitiGallery = () => {
                 railElRef.current.scrollTop = 0;
                 railElRef.current.scrollLeft = 0;
             }
+            pinSettledHero();
             applyDockedLayout();
             updateRailCue();
+            probeHero('after-dock');
         }
     }, [thumbsDocked, motionGen]);
 
@@ -950,21 +1189,25 @@ const GraffitiGallery = () => {
             if (busyRef.current) return;
             const layout = layoutFor(detailIndex);
             if (!layout) return;
+            const from = measureOnScreen();
+            settledRef.current = layout;
             destRef.current = layout.poses;
-            posesRef.current = layout.poses;
             setCopyBox(layout.copy);
             setRailBox(layout.rail);
             railRef.current = layout.rail;
-            if (railElRef.current) {
-                railElRef.current.scrollTop = 0;
-                railElRef.current.scrollLeft = 0;
-            }
-            if (detailIndex != null && thumbsDockedRef.current) {
-                applyDockedLayout();
-                updateRailCue();
-                return;
-            }
-            applyAll(layout.poses, layout.poses);
+            const docked = detailIndex != null && thumbsDockedRef.current;
+            const token = armBusy();
+            runMotion(from, layout.poses, () => {
+                releaseBusy(token);
+                if (docked) {
+                    applyDockedLayout();
+                    updateRailCue();
+                }
+                pinSettledHero(layout);
+                syncClose(layout.poses, layout.copy);
+            }, {
+                skipRoles: docked ? new Set(['thumb']) : null,
+            });
         };
         window.addEventListener('resize', onResize);
         return () => window.removeEventListener('resize', onResize);
@@ -1124,6 +1367,7 @@ const GraffitiGallery = () => {
         openedRef.current = false;
         posesRef.current = [];
         destRef.current = [];
+        settledRef.current = null;
         pendingJobRef.current = null;
         pendingPinRef.current = null;
         pendingCloseRef.current = null;
@@ -1248,16 +1492,16 @@ const GraffitiGallery = () => {
                     <div className="stack-page-veil" ref={veilRef} />
                     <div className="stack-overlay-head" ref={headRef}>
                         <h2 className="stack-overlay-title">{openDetail.title}</h2>
-                        <button
-                            type="button"
-                            className="stack-overlay-close"
-                            aria-label={inDetail ? 'Back to grid' : 'Close'}
-                            ref={closeRef}
-                            onClick={onCloseStep}
-                        >
-                            ×
-                        </button>
                     </div>
+                    <button
+                        type="button"
+                        className="stack-overlay-close"
+                        aria-label={inDetail ? 'Back to grid' : 'Close'}
+                        ref={closeRef}
+                        onClick={onCloseStep}
+                    >
+                        ×
+                    </button>
                     <div className="stack-overlay-stage" ref={stageRef}>
                         {inDetail && railBox ? (
                             <div
@@ -1332,10 +1576,9 @@ const GraffitiGallery = () => {
                             </div>
                         ) : null}
                         {openDetail.items.map((item, itemIndex) => {
-                            const pose = destRef.current[itemIndex];
                             const role = !inDetail
                                 ? 'grid'
-                                : (pose?.role || (itemIndex === detailIndex ? 'hero' : 'thumb'));
+                                : (itemIndex === detailIndex ? 'hero' : 'thumb');
                             const aspect = role === 'hero'
                                 ? aspectOf(item)
                                 : itemGridAspect(openDetail, item);

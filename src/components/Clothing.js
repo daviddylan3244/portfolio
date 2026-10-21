@@ -754,7 +754,32 @@ function Clothing() {
         let postCloseFrame = 0;
         let quietRows = new Set();
         let quietRowsUntil = 0;
+        let layoutHeld = false;
+        let layoutHeldUntil = 0;
+        let positionWriter = 'tick';
+        let rowSyncUntil = 0;
+        let rowSyncLast = new Map();
+        const ROW_SYNC_PROBE = process.env.NODE_ENV !== 'production';
+        const layoutWritesQuiet = () => layoutHeld || performance.now() < layoutHeldUntil;
+        const holdLayoutWrites = () => {
+            layoutHeld = true;
+        };
+        const releaseLayoutWrites = (holdMs = 1600) => {
+            layoutHeld = false;
+            layoutHeldUntil = performance.now() + holdMs;
+        };
+        const runAsWriter = (name, fn) => {
+            const prev = positionWriter;
+            positionWriter = name;
+            try {
+                return fn();
+            } finally {
+                positionWriter = prev;
+            }
+        };
         let deferredFlyers = [];
+        let closeProbe = null;
+        const CLOSE_PROBE = process.env.NODE_ENV !== 'production';
         const rowLayoutQuiet = (rowIndex) => {
             if (rowIndex == null || rowIndex < 0) return false;
             if (viewer) {
@@ -890,6 +915,7 @@ function Clothing() {
             document.documentElement.style.overflow = 'hidden';
             document.addEventListener('touchmove', blockTouchScroll, { passive: false });
             cacheStreamOrigin();
+            holdLayoutWrites();
         };
 
         const unlockScroll = () => {
@@ -910,9 +936,12 @@ function Clothing() {
             window.scrollTo(0, y);
             scrollLockY = null;
             cacheStreamOrigin();
-            lastTime = performance.now();
             requestAnimationFrame(() => {
-                suppressScroll = false;
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        suppressScroll = false;
+                    });
+                });
             });
         };
 
@@ -1249,6 +1278,8 @@ function Clothing() {
                     : Math.sin(slot.swayPhase) * SWAY_AMOUNT_PX;
             const scale = slot.scale || 1;
             const transform = `translate3d(${slot.x}px, ${sway}px, 0) scale(${scale})`;
+            slot.paintedX = slot.x;
+            slot.paintedWriter = positionWriter;
             if (slot.paintedTransform !== transform) {
                 slot.paintedTransform = transform;
                 slot.el.style.transform = transform;
@@ -1644,10 +1675,11 @@ function Clothing() {
                 if (row.style.pointerEvents !== pointerEvents) {
                     row.style.pointerEvents = pointerEvents;
                 }
-                if (row.style.transform) row.style.transform = '';
-                rowPose[index] = { ty: 0, scale: 1 };
             });
-            section.classList.toggle('is-viewer-open', amount > 0.02);
+            section.classList.toggle(
+                'is-viewer-open',
+                amount > 0.02 || !!(viewer && viewer.phase === 'closing')
+            );
         };
 
         const viewerAspect = (spec, slot) => {
@@ -1886,6 +1918,25 @@ function Clothing() {
             };
         };
 
+        const liveClosePose = (slot, layout) => poseFromThumb(liveThumb(slot), layout);
+
+        const prepareHomeTile = (slot) => {
+            if (!slot?.el) return;
+            const img = slot.spec && slot.spec.img;
+            if (img && img.parentNode !== slot.el && !imgOwnedByOtherSlot(img, slot)) {
+                slot.el.appendChild(img);
+                if (slot.labelEl && slot.labelEl.parentNode !== slot.el) {
+                    slot.el.appendChild(slot.labelEl);
+                }
+            }
+            if (img && typeof img.decode === 'function') {
+                img.decode().catch(() => undefined);
+            }
+            slot.el.style.willChange = 'transform';
+            slot.el.style.backgroundColor = 'transparent';
+            paint(slot);
+        };
+
         const thumbOnScreen = (thumb) =>
             !!thumb && thumb.left < window.innerWidth && thumb.left + thumb.width > 0;
 
@@ -1911,7 +1962,7 @@ function Clothing() {
 
         const closeTargetFor = (slot, layout, tileGone, homeWidth, homeKey, homeRow) => {
             if (homeTileStillThere(slot, homeKey, tileGone)) {
-                return { exitRight: false, pose: poseFromThumb(liveThumb(slot), layout) };
+                return { exitRight: false, pose: liveClosePose(slot, layout) };
             }
             return {
                 exitRight: true,
@@ -2177,10 +2228,160 @@ function Clothing() {
             startPanelReveal();
         };
 
+        const beginRowSyncProbe = () => {
+            if (!ROW_SYNC_PROBE) return;
+            rowSyncUntil = Number.POSITIVE_INFINITY;
+            rowSyncLast = new Map();
+        };
+
+        const endRowSyncProbe = () => {
+            if (!ROW_SYNC_PROBE) return;
+            rowSyncUntil = performance.now() + 1500;
+        };
+
+        const sampleRowSyncProbe = (now) => {
+            if (!ROW_SYNC_PROBE || !rowSyncUntil || now > rowSyncUntil) return;
+            const { first, last } = visibleBounds();
+            const deltas = [];
+            for (let row = first; row <= last; row += 1) {
+                let tile = null;
+                for (let i = 0; i < pool.length; i += 1) {
+                    const slot = pool[i];
+                    if (slot.row !== row || slot.frozen || !slotIsLive(slot)) continue;
+                    if (slot.x + slot.width <= 0 || slot.x >= viewportWidth) continue;
+                    if (!tile || slot.x < tile.x) tile = slot;
+                }
+                if (!tile || tile.paintedX == null) continue;
+                const prev = rowSyncLast.get(row);
+                rowSyncLast.set(row, {
+                    x: tile.paintedX,
+                    writer: tile.paintedWriter || positionWriter,
+                });
+                if (!prev) continue;
+                deltas.push({
+                    row,
+                    dx: tile.paintedX - prev.x,
+                    writer: tile.paintedWriter || positionWriter,
+                    x: tile.paintedX,
+                });
+            }
+            if (deltas.length < 2) return;
+            let min = deltas[0].dx;
+            let max = deltas[0].dx;
+            for (let i = 1; i < deltas.length; i += 1) {
+                if (deltas[i].dx < min) min = deltas[i].dx;
+                if (deltas[i].dx > max) max = deltas[i].dx;
+            }
+            if (max - min > 0.5) {
+                console.warn('[row-sync] rows moved apart', {
+                    spread: Math.round((max - min) * 100) / 100,
+                    rows: deltas.map((item) => ({
+                        row: item.row,
+                        dx: Math.round(item.dx * 100) / 100,
+                        writer: item.writer,
+                    })),
+                    writers: [...new Set(deltas.map((item) => item.writer))],
+                });
+            }
+            if (now >= rowSyncUntil && rowSyncUntil !== Number.POSITIVE_INFINITY) {
+                rowSyncUntil = 0;
+                rowSyncLast = new Map();
+            }
+        };
+
+        const startCloseProbe = (slot) => {
+            if (!CLOSE_PROBE || !slot) return;
+            const neighbor = pool.find((item) => (
+                item !== slot
+                && item.row === slot.row
+                && !item.frozen
+            ));
+            closeProbe = {
+                slot,
+                neighbor: neighbor || null,
+                lastHomeX: slot.x,
+                lastNeighborX: neighbor ? neighbor.x : slot.x,
+                lastNow: performance.now(),
+                handedOff: false,
+                until: 0,
+                maxStepDiff: 0,
+                longFrames: [],
+                mismatches: 0,
+            };
+        };
+
+        const sampleCloseProbe = (now) => {
+            if (!closeProbe) return;
+            const dtMs = now - closeProbe.lastNow;
+            if (dtMs > 20) {
+                const ms = Math.round(dtMs * 10) / 10;
+                closeProbe.longFrames.push(ms);
+                console.warn('[close-probe] long frame', ms);
+            }
+            const homeX = closeProbe.slot.x;
+            const neighborX = closeProbe.neighbor ? closeProbe.neighbor.x : homeX;
+            const homeStep = homeX - closeProbe.lastHomeX;
+            const neighborStep = neighborX - closeProbe.lastNeighborX;
+            const diff = Math.abs(homeStep - neighborStep);
+            if (diff > 0.5) {
+                closeProbe.mismatches += 1;
+                console.warn('[close-probe] x-step mismatch', {
+                    homeStep,
+                    neighborStep,
+                    diff,
+                });
+            }
+            closeProbe.maxStepDiff = Math.max(closeProbe.maxStepDiff, diff);
+            closeProbe.lastHomeX = homeX;
+            closeProbe.lastNeighborX = neighborX;
+            closeProbe.lastNow = now;
+            if (closeProbe.handedOff && closeProbe.until && now >= closeProbe.until) {
+                console.info('[close-probe] done', {
+                    maxStepDiff: closeProbe.maxStepDiff,
+                    mismatches: closeProbe.mismatches,
+                    longFrames: closeProbe.longFrames,
+                });
+                closeProbe = null;
+            }
+        };
+
+        const markCloseProbeHandoff = (now) => {
+            if (!closeProbe || closeProbe.handedOff) return;
+            closeProbe.handedOff = true;
+            closeProbe.until = now + 1000;
+        };
+
+        const handoffHomeTile = () => {
+            if (!viewer || viewer.handedOff || viewer.closeExitRight) return;
+            const slot = viewer.slot;
+            if (!homeTileStillThere(slot, viewer.shownKey, viewer.tileGone)) return;
+            const live = liveClosePose(slot, viewer.layout);
+            if (activeFlyer) placeNode(activeFlyer, live);
+            viewer.pose = live;
+            viewer.thumbOpacity = 1;
+            if (CLOSE_PROBE) {
+                const tile = liveThumb(slot);
+                const miss = Math.hypot(live.x - tile.left, live.y - tile.top);
+                if (miss > 0.5) {
+                    console.warn('[close-probe] flyer/tile miss at handoff', { miss, live, tile });
+                }
+            }
+            revealSlot(slot);
+            overlay.style.pointerEvents = 'none';
+            if (activeFlyer?.root) {
+                activeFlyer.root.hidden = true;
+                activeFlyer.root.style.willChange = 'auto';
+            }
+            viewer.handedOff = true;
+            markCloseProbeHandoff(performance.now());
+            if (fineHover) syncHover(true);
+        };
+
         const finishViewer = () => {
             if (!viewer) return;
             const slot = viewer.slot;
-            const revealHome = homeTileStillThere(slot, viewer.shownKey, viewer.tileGone);
+            const revealHome = !viewer.handedOff
+                && homeTileStillThere(slot, viewer.shownKey, viewer.tileGone);
             const departures = viewer.departures;
             const flyer = activeFlyer;
             quietRows = new Set();
@@ -2199,10 +2400,8 @@ function Clothing() {
                 if (dep.flyer?.root) dep.flyer.root.hidden = true;
                 leftoverFlyers.push(dep.flyer);
             });
-            applyRows(0);
             if (flyer?.root) flyer.root.hidden = true;
             activeFlyer = homeFlyer;
-            overlay.hidden = true;
             closeBtn.hidden = true;
             caption.style.opacity = '0';
             caption.hidden = true;
@@ -2215,11 +2414,16 @@ function Clothing() {
                 menuEl.style.opacity = '';
                 menuEl.style.pointerEvents = '';
             }
-            section.classList.remove('is-viewer-open');
             if (hoverSlot && !slotHasLoadedPhoto(hoverSlot)) {
                 hoverSlot.el.classList.remove('is-hovered');
                 hoverSlot = null;
             }
+            if (slot?.el) {
+                window.setTimeout(() => {
+                    if (slot.el) slot.el.style.willChange = 'auto';
+                }, 1000);
+            }
+            overlay.style.pointerEvents = 'none';
             const settle = () => {
                 if (cancelled) return;
                 leftoverFlyers.concat(deferredFlyers).forEach((node) => {
@@ -2236,20 +2440,22 @@ function Clothing() {
                 resetOverlayClip();
                 panel.style.transition = '';
                 panel.hidden = true;
+                overlay.hidden = true;
+                overlay.style.pointerEvents = '';
+                section.classList.remove('is-viewer-open');
+                applyRows(0);
                 unlockScroll();
                 syncPlayback();
-                const repairLater = () => {
-                    if (cancelled || viewer) return;
-                    repairVisibleRows();
-                };
-                if (typeof requestIdleCallback === 'function') {
-                    requestIdleCallback(repairLater, { timeout: 500 });
-                } else {
-                    window.setTimeout(repairLater, 200);
-                }
+                releaseLayoutWrites(1600);
+                endRowSyncProbe();
             };
+            const later = typeof requestIdleCallback === 'function'
+                ? (fn) => requestIdleCallback(fn, { timeout: 280 })
+                : (fn) => window.setTimeout(fn, 80);
             postCloseFrame = requestAnimationFrame(() => {
-                postCloseFrame = requestAnimationFrame(settle);
+                postCloseFrame = requestAnimationFrame(() => {
+                    later(settle);
+                });
             });
         };
 
@@ -2338,7 +2544,9 @@ function Clothing() {
             } else {
                 viewer.rowAmount = 1;
             }
-            applyRows(viewer.rowAmount);
+            if (!(viewer.phase === 'closing' && viewer.closeDone)) {
+                applyRows(viewer.rowAmount);
+            }
 
             if (viewer.phase === 'opening' || viewer.phase === 'switching') {
                 const raw = Math.min(1, (now - viewer.t0) / duration);
@@ -2385,7 +2593,7 @@ function Clothing() {
                 const raw = Math.min(1, (now - viewer.closeT0) / closeDuration);
                 const amount = easeClose(raw);
                 viewer.progress = 1 - raw;
-                viewer.thumbOpacity = 0;
+                viewer.thumbOpacity = viewer.closeExitRight ? 0 : 0.001;
                 viewer.frameOpacity = reducedMotion ? 1 - amount : frameOpacityFor('closing', amount);
                 viewer.closeDone = raw >= 1;
                 if (GALLERY_PANEL_ENABLED && !panel.hidden) {
@@ -2408,9 +2616,11 @@ function Clothing() {
                     viewer.closeTo = next.pose;
                 }
                 const live = viewer.closeTo;
-                const pose = reducedMotion ? viewer.closeFrom : lerpPose(viewer.closeFrom, live, amount);
+                const pose = viewer.closeDone
+                    ? live
+                    : (reducedMotion ? viewer.closeFrom : lerpPose(viewer.closeFrom, live, amount));
                 if (reducedMotion) activeFlyer.root.style.opacity = String(1 - amount);
-                placeOverlay(pose, viewer.layout);
+                if (!viewer.handedOff) placeOverlay(pose, viewer.layout);
             }
 
             advanceDepartures(now);
@@ -2423,12 +2633,25 @@ function Clothing() {
             }
 
             if (viewer.phase === 'closing' && viewer.closeDone) {
-                if (!viewer.closeExitRight) {
-                    viewer.thumbOpacity = 1;
-                    revealSlot(viewer.slot);
+                if (!viewer.handedOff) {
+                    if (!viewer.closeExitRight) {
+                        handoffHomeTile();
+                    } else {
+                        if (activeFlyer?.root) {
+                            activeFlyer.root.hidden = true;
+                            activeFlyer.root.style.willChange = 'auto';
+                        }
+                        viewer.handedOff = true;
+                        markCloseProbeHandoff(now);
+                    }
                 }
-                activeFlyer.root.hidden = true;
-                if (viewer.departures.length === 0) finishViewer();
+                if (viewer.departures.length === 0 && !viewer.finishScheduled) {
+                    viewer.finishScheduled = true;
+                    postCloseFrame = requestAnimationFrame(() => {
+                        postCloseFrame = 0;
+                        finishViewer();
+                    });
+                }
             }
         };
 
@@ -2437,6 +2660,7 @@ function Clothing() {
             if (viewer || !spec) return;
 
             const now = performance.now();
+            beginRowSyncProbe();
             lockScroll();
             cacheStreamOrigin();
             const layout = layoutViewer(spec, slot);
@@ -2500,6 +2724,7 @@ function Clothing() {
             placePanel(layout);
             clipOverlayToHeader();
             overlay.hidden = false;
+            overlay.style.pointerEvents = '';
             closeBtn.hidden = false;
             closeBtn.style.opacity = '0';
             closeBtn.style.willChange = 'transform, opacity';
@@ -2640,7 +2865,10 @@ function Clothing() {
             viewer.closeExitRight = closingTo.exitRight;
             viewer.closeTo = closingTo.pose;
             viewer.closeDone = false;
-            viewer.thumbOpacity = 0;
+            viewer.handedOff = false;
+            viewer.thumbOpacity = closingTo.exitRight ? 0 : 0.001;
+            if (!closingTo.exitRight) prepareHomeTile(viewer.slot);
+            startCloseProbe(viewer.slot);
             caption.style.opacity = '0';
             // Freeze the sweep where it is; opacity is driven on the same rAF
             // as the shrink so the CSS panel transition cannot fight it.
@@ -2741,6 +2969,7 @@ function Clothing() {
         const populateRow = (rowIndex, specs, mode) => {
             const rowEl = rows[rowIndex];
             if (!rowEl) return;
+            return runAsWriter('populateRow', () => {
             purgeDeadSlots(rowIndex);
             rowEl.replaceChildren();
             purgeDeadSlots(rowIndex);
@@ -2793,25 +3022,28 @@ function Clothing() {
                 markShown(slot.spec);
                 releaseReserved(slot.spec);
             });
+            });
         };
 
         const packRow = (rowIndex, fromRight) => {
-            if (rowLayoutQuiet(rowIndex)) return;
-            const mine = pool
-                .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
-                .sort((a, b) => a.x - b.x);
-            const packFromRight = fromRight === undefined ? introEntering.has(rowIndex) : fromRight;
-            if (packFromRight) {
-                for (let i = mine.length - 2; i >= 0; i -= 1) {
-                    mine[i].x = mine[i + 1].x - mine[i].width - ITEM_GAP_PX;
+            if (layoutWritesQuiet() || rowLayoutQuiet(rowIndex)) return;
+            runAsWriter('packRow', () => {
+                const mine = pool
+                    .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
+                    .sort((a, b) => a.x - b.x);
+                const packFromRight = fromRight === undefined ? introEntering.has(rowIndex) : fromRight;
+                if (packFromRight) {
+                    for (let i = mine.length - 2; i >= 0; i -= 1) {
+                        mine[i].x = mine[i + 1].x - mine[i].width - ITEM_GAP_PX;
+                        paint(mine[i]);
+                    }
+                    return;
+                }
+                for (let i = 1; i < mine.length; i += 1) {
+                    mine[i].x = mine[i - 1].x + mine[i - 1].width + ITEM_GAP_PX;
                     paint(mine[i]);
                 }
-                return;
-            }
-            for (let i = 1; i < mine.length; i += 1) {
-                mine[i].x = mine[i - 1].x + mine[i - 1].width + ITEM_GAP_PX;
-                paint(mine[i]);
-            }
+            });
         };
 
         const rowNeedsCoverage = (rowIndex, mode) => {
@@ -2885,17 +3117,19 @@ function Clothing() {
         };
 
         const shiftSlotsFrom = (rowIndex, minX, delta) => {
-            if (!delta || rowLayoutQuiet(rowIndex)) return;
-            pool.forEach((slot) => {
-                if (slot.row !== rowIndex || !slotIsLive(slot)) return;
-                if (slot.x < minX - 0.5) return;
-                slot.x += delta;
-                paint(slot);
+            if (!delta || layoutWritesQuiet() || rowLayoutQuiet(rowIndex)) return;
+            runAsWriter('shiftSlotsFrom', () => {
+                pool.forEach((slot) => {
+                    if (slot.row !== rowIndex || !slotIsLive(slot)) return;
+                    if (slot.x < minX - 0.5) return;
+                    slot.x += delta;
+                    paint(slot);
+                });
             });
         };
 
         const fillRealGap = (rowIndex, leftX, rightX, leftWidth, rightWidth, grow) => {
-            if (rowLayoutQuiet(rowIndex)) return 0;
+            if (layoutWritesQuiet() || rowLayoutQuiet(rowIndex)) return 0;
             let added = 0;
             let left = leftX;
             let right = rightX;
@@ -2979,6 +3213,16 @@ function Clothing() {
         const startRow = (rowIndex, mode) => {
             const rowEl = rows[rowIndex];
             if (cancelled || !rowEl) return Promise.resolve();
+            if (layoutWritesQuiet()) {
+                window.setTimeout(() => {
+                    if (cancelled) return;
+                    if (startedRows.has(rowIndex) && pool.some((slot) => slot.row === rowIndex && slotIsLive(slot))) {
+                        return;
+                    }
+                    startRow(rowIndex, mode);
+                }, layoutHeld ? 500 : 200);
+                return Promise.resolve();
+            }
             rowEpoch[rowIndex] = (rowEpoch[rowIndex] || 0) + 1;
             const epoch = rowEpoch[rowIndex];
             startedRows.add(rowIndex);
@@ -3151,6 +3395,7 @@ function Clothing() {
 
         let mountedKey = '';
         const mountRange = () => {
+            if (layoutWritesQuiet()) return;
             const { first, last } = visibleBounds();
             const buffer = window.innerWidth <= MOBILE_BREAKPOINT_PX ? MOBILE_ROW_BUFFER : ROW_BUFFER;
             const from = Math.max(0, first - buffer);
@@ -3208,7 +3453,8 @@ function Clothing() {
         };
 
         const repairVisibleRows = (from, to) => {
-            if (cancelled) return;
+            if (cancelled || layoutWritesQuiet()) return;
+            return runAsWriter('repairVisibleRows', () => {
             if (from == null || to == null) {
                 const bounds = visibleBounds();
                 const buffer =
@@ -3282,6 +3528,7 @@ function Clothing() {
                 );
                 if (added) warnRowRepair(index, 'gap', { added });
             }
+            });
         };
 
         const scheduleIntroRow = (index, at) => {
@@ -3316,7 +3563,11 @@ function Clothing() {
                 if (!slotHasLoadedPhoto(slot)) continue;
                 if (slot.el.style.pointerEvents === 'none') continue;
                 if (slot.el.style.opacity === '0' || slot.paintedOpacity === 0) continue;
-                if (viewer && (!rowStaysVisible(slot.row) || (slot === viewer.slot && !viewer.tileGone))) continue;
+                if (
+                    viewer
+                    && !viewer.handedOff
+                    && (!rowStaysVisible(slot.row) || (slot === viewer.slot && !viewer.tileGone))
+                ) continue;
                 const scale = slot.scale || 1;
                 const width = slot.width * scale;
                 const height = itemHeight * scale;
@@ -3392,16 +3643,17 @@ function Clothing() {
             alignLabel(slot);
         };
 
-        const syncHover = () => {
-            if (!fineHover || (!pointerInside && !hoverSlot)) return;
-            if (viewer && viewer.phase !== 'open') {
+        const syncHover = (force = false) => {
+            if (!fineHover) return;
+            if (viewer && viewer.phase !== 'open' && !viewer.handedOff) {
                 if (hoverSlot) {
                     hoverSlot.el.classList.remove('is-hovered');
                     hoverSlot = null;
                 }
                 return;
             }
-            const slot = pointerInside ? slotUnderPointer() : null;
+            if (!force && !pointerInside && !hoverSlot) return;
+            const slot = (force || pointerInside) ? slotUnderPointer() : null;
             if (slot === hoverSlot) {
                 if (hoverSlot) alignLabel(hoverSlot);
                 return;
@@ -3464,6 +3716,7 @@ function Clothing() {
 
         const tick = (now) => {
             if (!running) return;
+            positionWriter = 'tick';
             const dt = lastTime ? Math.min(MAX_FRAME_SECONDS, (now - lastTime) / 1000) : 0;
             lastTime = now;
             const closing = viewer && viewer.phase === 'closing';
@@ -3477,19 +3730,29 @@ function Clothing() {
                     slot.x += slot.speed * motionScale * dt;
                     if (SWAY_SPEED) slot.swayPhase += SWAY_SPEED * dt;
                     if (slot.x > viewportWidth) {
+                        if (
+                            viewer
+                            && viewer.phase === 'closing'
+                            && slotIsHeld(slot)
+                            && !viewer.closeExitRight
+                        ) {
+                            paint(slot);
+                            continue;
+                        }
                         recycle(slot);
                         continue;
                     }
                     if (!closing) ensureReadyBeforeVisible(slot);
-                    const rowHidden = rows[slot.row]?.dataset.opacity === '0';
-                    if (!rowHidden || slotIsHeld(slot)) paint(slot);
+                    paint(slot);
                 }
             } else if (viewer) {
                 paint(viewer.slot);
             }
 
             advanceViewer(now, dt);
-            if (fineHover && !closing) syncHover();
+            sampleCloseProbe(now);
+            sampleRowSyncProbe(now);
+            if (fineHover && (!closing || viewer.handedOff)) syncHover();
             if (!closing && process.env.NODE_ENV !== 'production') {
                 warnEmptyVisibleTiles();
                 warnOnScreenDuplicates();
@@ -3620,6 +3883,7 @@ function Clothing() {
         let scrollFrame = 0;
         const onScroll = () => {
             if (suppressScroll || scrollLockY != null || pageIsZoomed()) return;
+            if (layoutWritesQuiet()) return;
             if (viewer && viewer.phase === 'closing') return;
             const y = pageScroll();
             const t = performance.now();
@@ -3632,6 +3896,7 @@ function Clothing() {
             scrollFrame = requestAnimationFrame(() => {
                 scrollFrame = 0;
                 if (cancelled || suppressScroll || scrollLockY != null) return;
+                if (layoutWritesQuiet()) return;
                 if (viewer && viewer.phase === 'closing') return;
                 pumpSmalls();
                 const { first, last } = visibleBounds();
@@ -3644,11 +3909,13 @@ function Clothing() {
         let resizeFrame = 0;
         const onResize = () => {
             if (pageIsZoomed()) return;
+            if (layoutWritesQuiet()) return;
             if (resizeFrame) return;
             resizeFrame = requestAnimationFrame(() => {
                 resizeFrame = 0;
-                if (cancelled || pageIsZoomed()) return;
+                if (cancelled || pageIsZoomed() || layoutWritesQuiet()) return;
                 if (viewer && viewer.phase === 'closing') return;
+                runAsWriter('resize', () => {
                 const previousHeight = itemHeight;
                 applyLayoutMetrics();
                 allocatedRows = 0;
@@ -3695,6 +3962,7 @@ function Clothing() {
                     syncLabel(hoverSlot);
                 }
                 syncPlayback();
+                });
             });
         };
         window.addEventListener('resize', onResize);
@@ -3705,7 +3973,7 @@ function Clothing() {
 
         const repairTimer = window.setInterval(() => {
             if (cancelled || suppressScroll || scrollLockY != null) return;
-            if (viewer) return;
+            if (viewer || layoutWritesQuiet()) return;
             repairVisibleRows();
         }, 500);
 
