@@ -993,7 +993,13 @@ function Clothing() {
         const rowTopInView = (index) => viewOriginY + rowTopPx(index);
         const pageScroll = () =>
             scrollLockY == null ? window.scrollY || window.pageYOffset || 0 : scrollLockY;
+        // On phones, size from the layout height captured when the width last
+        // changed. The keyboard and Safari's toolbar change visualViewport
+        // height only, and must not reflow rows or open photos.
+        let layoutWidth = window.innerWidth;
+        let layoutHeight = window.innerHeight;
         const viewHeight = () => {
+            if (window.innerWidth < MOBILE_BREAKPOINT_PX) return layoutHeight;
             const viewport = window.visualViewport;
             if (viewport && viewport.height) return viewport.height;
             return window.innerHeight;
@@ -3521,9 +3527,18 @@ function Clothing() {
             play();
         };
 
+        let touchToggleAt = 0;
+        let lastMobileToggle = { slot: null, at: 0 };
+        const markTouchToggle = () => {
+            touchToggleAt = performance.now();
+        };
+        const isGhostClick = () => performance.now() - touchToggleAt < 500;
         const activateSlot = (slot) => {
             if (!slot?.spec) return;
             if (window.innerWidth < MOBILE_BREAKPOINT_PX) {
+                const now = performance.now();
+                if (lastMobileToggle.slot === slot && now - lastMobileToggle.at < 500) return;
+                lastMobileToggle = { slot, at: now };
                 if (slot.search) toggleMobileSearchCopy(slot);
                 else toggleGalleryBand(slot);
                 return;
@@ -3548,6 +3563,7 @@ function Clothing() {
                 if (event.pointerType === 'touch') {
                     slot.tapX = event.clientX;
                     slot.tapY = event.clientY;
+                    slot.touchId = event.pointerId;
                 }
             });
             el.addEventListener('touchstart', () => {
@@ -3559,6 +3575,8 @@ function Clothing() {
                 const dy = Math.abs(event.clientY - slot.tapY);
                 if (dx > 12 || dy > 12) return;
                 slot.openedFromTap = true;
+                openTouchId = slot.touchId;
+                markTouchToggle();
                 activateSlot(slot);
             });
             if (fineHover) {
@@ -3576,7 +3594,7 @@ function Clothing() {
             }
             el.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (slot.openedFromTap) {
+                if (slot.openedFromTap || isGhostClick()) {
                     slot.openedFromTap = false;
                     return;
                 }
@@ -4911,6 +4929,15 @@ function Clothing() {
         const MOBILE_OPEN_SCROLL_MS = 400;
         const MOBILE_SCROLL_EASE = [0.25, 0.1, 0.25, 1];
         let mobileOpenScroll = null;
+        let applyingOpenScroll = false;
+        let openTouchId = null;
+        const assignOpenScroll = (y) => {
+            applyingOpenScroll = true;
+            window.scrollTo(0, y);
+            window.setTimeout(() => {
+                applyingOpenScroll = false;
+            }, 0);
+        };
 
         const cancelMobileOpenScroll = () => {
             if (!mobileOpenScroll) return;
@@ -4935,19 +4962,19 @@ function Clothing() {
             const targetY = Math.max(0, Math.min(maxY, startY + delta));
             if (Math.abs(targetY - startY) <= 1) return;
             if (reducedMotion) {
-                mobileOpenScroll = { expected: targetY, raf: 0 };
-                window.scrollTo(0, targetY);
+                mobileOpenScroll = { expected: targetY, raf: 0, touchId: openTouchId };
+                assignOpenScroll(targetY);
                 mobileOpenScroll = null;
                 return;
             }
-            const state = { expected: startY, raf: 0 };
+            const state = { expected: startY, raf: 0, touchId: openTouchId };
             const t0 = performance.now();
             const step = (now) => {
                 if (mobileOpenScroll !== state) return;
                 const raw = Math.min(1, (now - t0) / MOBILE_OPEN_SCROLL_MS);
                 const y = startY + (targetY - startY) * easeBezier(MOBILE_SCROLL_EASE, raw);
                 state.expected = y;
-                window.scrollTo(0, y);
+                assignOpenScroll(y);
                 if (raw < 1) state.raf = requestAnimationFrame(step);
                 else mobileOpenScroll = null;
             };
@@ -5473,6 +5500,7 @@ function Clothing() {
             slot.el.setAttribute('aria-expanded', 'true');
             photoEl.addEventListener('click', (event) => {
                 event.stopPropagation();
+                if (isGhostClick()) return;
                 closeGalleryBand(band);
             });
             copy.style.opacity = '0';
@@ -5989,9 +6017,16 @@ function Clothing() {
         document.addEventListener('visibilitychange', onVisibility);
 
         let scrollFrame = 0;
-        const onScroll = () => {
+        const onScroll = (event) => {
+            const fromVisualViewport = !!(
+                event
+                && window.visualViewport
+                && event.currentTarget === window.visualViewport
+            );
             if (
                 mobileOpenScroll
+                && !applyingOpenScroll
+                && !fromVisualViewport
                 && Math.abs((window.scrollY || window.pageYOffset || 0) - mobileOpenScroll.expected) > 1.5
             ) {
                 cancelMobileOpenScroll();
@@ -6027,8 +6062,16 @@ function Clothing() {
             });
         };
         window.addEventListener('scroll', onScroll, { passive: true });
-        const interruptMobileOpenScroll = () => {
-            if (mobileOpenScroll) cancelMobileOpenScroll();
+        const interruptMobileOpenScroll = (event) => {
+            if (!mobileOpenScroll) return;
+            const touches = event && event.touches;
+            const gestureId = mobileOpenScroll.touchId;
+            if (touches && gestureId != null) {
+                for (let i = 0; i < touches.length; i += 1) {
+                    if (touches[i].identifier === gestureId) return;
+                }
+            }
+            cancelMobileOpenScroll();
         };
         window.addEventListener('wheel', interruptMobileOpenScroll, { passive: true });
         window.addEventListener('touchstart', interruptMobileOpenScroll, { passive: true });
@@ -6036,6 +6079,15 @@ function Clothing() {
         let resizeFrame = 0;
         const onResize = () => {
             if (pageIsZoomed()) return;
+            const width = window.innerWidth;
+            const widthChanged = Math.abs(width - layoutWidth) >= 1;
+            if (width < MOBILE_BREAKPOINT_PX) {
+                if (!widthChanged) return;
+                layoutWidth = width;
+                layoutHeight = window.innerHeight;
+            } else if (widthChanged) {
+                layoutWidth = width;
+            }
             if (!searchActive && layoutWritesQuiet() && !galleryBands.length && !closingBands.length) return;
             if (resizeFrame) return;
             resizeFrame = requestAnimationFrame(() => {

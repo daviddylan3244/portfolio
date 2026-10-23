@@ -158,18 +158,19 @@
 }
 
 @media (max-width: 767px) {
+    .clothing-container.bg-level-3 {
+        background-color: var(--bg-level-3-color);
+        background-image: none;
+    }
+
     .clothing-container .header-container {
         position: fixed;
         top: 0;
         left: 0;
         right: 0;
         z-index: 200;
-        background-color: #40382e;
-        background-image: var(--bg-level-3-image);
-        background-repeat: no-repeat;
-        background-attachment: scroll;
-        background-size: 100vw 100dvh;
-        background-position: top center;
+        background-color: var(--bg-level-3-color);
+        background-image: none;
     }
 }
 
