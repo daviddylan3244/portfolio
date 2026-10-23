@@ -158,6 +158,15 @@
 }
 
 @media (max-width: 767px) {
+    body:has(.clothing-container) {
+        background-color: var(--bg-level-3-color);
+        background-image: none;
+    }
+
+    .clothing-container {
+        display: flow-root;
+    }
+
     .clothing-container.bg-level-3 {
         background-color: var(--bg-level-3-color);
         background-image: none;

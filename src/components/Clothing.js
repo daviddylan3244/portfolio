@@ -899,6 +899,11 @@ function Clothing() {
             streamOriginX = rect.left + (window.scrollX || window.pageXOffset || 0);
             streamOriginY = rect.top + pageScroll();
         };
+        const viewportPan = () => {
+            if (window.innerWidth >= MOBILE_BREAKPOINT_PX) return 0;
+            const viewport = window.visualViewport;
+            return viewport ? Math.max(0, viewport.offsetTop || 0) : 0;
+        };
         const applyHeaderRowGap = () => {
             const header = headerEl();
             if (!header) {
@@ -906,33 +911,37 @@ function Clothing() {
                 return;
             }
             const headerBox = header.getBoundingClientRect();
-            let chromeBottom = headerBox.top;
+            const pan = viewportPan();
+            let chromeBottom = headerBox.top - pan;
             const logo = header.querySelector('.header-logo');
             if (logo) {
-                chromeBottom = Math.max(chromeBottom, logo.getBoundingClientRect().bottom);
+                chromeBottom = Math.max(chromeBottom, logo.getBoundingClientRect().bottom - pan);
             }
             if (menuEl) {
-                chromeBottom = Math.max(chromeBottom, menuEl.getBoundingClientRect().bottom);
+                chromeBottom = Math.max(chromeBottom, menuEl.getBoundingClientRect().bottom - pan);
             }
             if (searchForm) {
-                chromeBottom = Math.max(chromeBottom, searchForm.getBoundingClientRect().bottom);
+                chromeBottom = Math.max(chromeBottom, searchForm.getBoundingClientRect().bottom - pan);
             }
             if (searchStatus && !searchStatus.hidden) {
-                chromeBottom = Math.max(chromeBottom, searchStatus.getBoundingClientRect().bottom);
+                chromeBottom = Math.max(chromeBottom, searchStatus.getBoundingClientRect().bottom - pan);
             }
+            chromeBottom = Math.max(0, chromeBottom);
             // Gallery keeps the 24px header gap. Search results sit one
-            // mobile photo-gap below the status line. The mobile header is
-            // fixed, so it is out of flow and the margin is the full offset
-            // from the top of the page.
+            // mobile photo-gap below the status line itself, not below the
+            // header's extra padding, and not including the keyboard pan.
             let belowChrome = HEADER_TO_ROW_GAP_PX;
             const headerPinned = window.innerWidth < MOBILE_BREAKPOINT_PX;
-            if (headerPinned) {
-                const statusShown = searchActive && searchStatus && !searchStatus.hidden;
-                belowChrome = statusShown ? mobilePhotoGapPx() : 24;
+            const statusShown = headerPinned && searchActive && searchStatus && !searchStatus.hidden;
+            if (statusShown) {
+                chromeBottom = Math.max(0, searchStatus.getBoundingClientRect().bottom - pan);
+                belowChrome = mobilePhotoGapPx();
+            } else if (headerPinned) {
+                belowChrome = 24;
             }
             const margin = headerPinned
                 ? Math.round(chromeBottom + belowChrome)
-                : Math.round(chromeBottom + belowChrome - headerBox.bottom);
+                : Math.round(chromeBottom + belowChrome - (headerBox.bottom - pan));
             const marginStr = margin ? `${margin}px` : '';
             if (searchActive) {
                 section.style.marginTop = '0px';
@@ -970,8 +979,11 @@ function Clothing() {
         };
 
         const applyLayoutMetrics = () => {
-            viewportWidth = section.clientWidth || window.innerWidth;
-            itemHeight = clampItemHeight(window.innerWidth);
+            const mobile = window.innerWidth < MOBILE_BREAKPOINT_PX;
+            viewportWidth = mobile
+                ? layoutWidth
+                : (section.clientWidth || window.innerWidth);
+            itemHeight = clampItemHeight(mobile ? layoutWidth : window.innerWidth);
             applyHeaderRowGap();
             cacheStreamOrigin();
             restFirstTop = Math.max(0, Math.round(streamOriginY));
@@ -3528,6 +3540,7 @@ function Clothing() {
         };
 
         let touchToggleAt = 0;
+        let swallowNextClick = false;
         let lastMobileToggle = { slot: null, at: 0 };
         const markTouchToggle = () => {
             touchToggleAt = performance.now();
@@ -3576,6 +3589,7 @@ function Clothing() {
                 if (dx > 12 || dy > 12) return;
                 slot.openedFromTap = true;
                 openTouchId = slot.touchId;
+                swallowNextClick = true;
                 markTouchToggle();
                 activateSlot(slot);
             });
@@ -4627,6 +4641,21 @@ function Clothing() {
             section.style.height = '0px';
         };
 
+        const syncMobileTileSize = () => {
+            if (window.innerWidth >= MOBILE_BREAKPOINT_PX) return;
+            pool.forEach((slot) => {
+                if (!slot?.el || slot.search) return;
+                const nextW = itemHeight * (slot.aspectRatio || 1);
+                const scale = slot.width > 0 ? nextW / slot.width : 1;
+                slot.x *= scale;
+                slot.width = nextW;
+                slot.speed = speedFor(slot.id);
+                slot.el.style.width = `${nextW}px`;
+                slot.el.style.height = `${itemHeight}px`;
+                paint(slot);
+            });
+        };
+
         const restoreGalleryAfterSearch = () => {
             searchActive = false;
             inView = true;
@@ -4637,6 +4666,7 @@ function Clothing() {
             section.removeAttribute('aria-hidden');
             applyHeaderRowGap();
             applyLayoutMetrics();
+            syncMobileTileSize();
             cacheStreamOrigin();
         };
 
@@ -4794,10 +4824,10 @@ function Clothing() {
             return positions;
         };
 
-        const searchBoardWidth = () => Math.max(
-            1,
-            searchBoard.clientWidth || viewportWidth || window.innerWidth
-        );
+        const searchBoardWidth = () => {
+            if (window.innerWidth < MOBILE_BREAKPOINT_PX) return Math.max(1, layoutWidth);
+            return Math.max(1, searchBoard.clientWidth || viewportWidth || window.innerWidth);
+        };
 
         // Vertical space between mobile search results, and the minimum
         // distance an auto-scrolled white frame may sit from the top.
@@ -4830,16 +4860,15 @@ function Clothing() {
             return Math.max(MOBILE_TITLE_RESERVE_PX, height + MOBILE_SEARCH_COPY_GAP_PX);
         };
 
-        const fitMobileFrame = (boardW, aspect, hasDesc, gapAbove, reservePx) => {
+        const fitMobileFrame = (boardW, aspect, hasDesc, gapAbove, reservePx, limitHeight) => {
             const safeAspect = aspect > 0 ? aspect : 1;
             const desk = desktopViewerPhotoSize(safeAspect, hasDesc);
             const ratio = desk.width > 0 ? desk.border / desk.width : 0;
             const maxOuterW = Math.max(1, boardW * 0.92);
             const reserve = reservePx > 0 ? reservePx : MOBILE_TITLE_RESERVE_PX;
-            const maxOuterH = Math.max(
-                80,
-                viewHeight() - chromeBottomPx() - Math.max(0, gapAbove) - reserve
-            );
+            const maxOuterH = limitHeight
+                ? Math.max(80, viewHeight() - chromeBottomPx() - Math.max(0, gapAbove) - reserve)
+                : Number.POSITIVE_INFINITY;
             let photoW = maxOuterW / (1 + 2 * ratio);
             const outerH = photoW * (1 / safeAspect + 2 * ratio);
             if (outerH > maxOuterH) photoW = maxOuterH / (1 / safeAspect + 2 * ratio);
@@ -4867,14 +4896,16 @@ function Clothing() {
             return { frameW: outerW, frameLeft, border, photoW, photoH };
         };
 
-        const fitMobileFrameFor = (boardW, spec, aspect, gapAbove) => {
+        const fitMobileFrameFor = (boardW, spec, aspect, gapAbove, limitHeight) => {
             const hasDesc = photoHasDescription(spec);
-            let frame = fitMobileFrame(boardW, aspect, hasDesc, gapAbove, MOBILE_TITLE_RESERVE_PX);
+            let frame = fitMobileFrame(boardW, aspect, hasDesc, gapAbove, MOBILE_TITLE_RESERVE_PX, limitHeight);
             let reserve = mobileTitleReserve(spec, frame.frameW);
             if (reserve !== MOBILE_TITLE_RESERVE_PX) {
-                frame = fitMobileFrame(boardW, aspect, hasDesc, gapAbove, reserve);
+                frame = fitMobileFrame(boardW, aspect, hasDesc, gapAbove, reserve, limitHeight);
                 const again = mobileTitleReserve(spec, frame.frameW);
-                if (again !== reserve) frame = fitMobileFrame(boardW, aspect, hasDesc, gapAbove, again);
+                if (again !== reserve) {
+                    frame = fitMobileFrame(boardW, aspect, hasDesc, gapAbove, again, limitHeight);
+                }
             }
             return frame;
         };
@@ -4887,7 +4918,7 @@ function Clothing() {
             const gapAbove = mobilePhotoGapPx();
             return (hits || []).map((hit, row) => {
                 const aspect = aspectFor(hit.item) || 1;
-                const frame = fitMobileFrameFor(rowWidth, hit.item, aspect, gapAbove);
+                const frame = fitMobileFrameFor(rowWidth, hit.item, aspect, gapAbove, false);
                 return {
                     hit,
                     row,
@@ -4929,57 +4960,57 @@ function Clothing() {
         const MOBILE_OPEN_SCROLL_MS = 400;
         const MOBILE_SCROLL_EASE = [0.25, 0.1, 0.25, 1];
         let mobileOpenScroll = null;
-        let applyingOpenScroll = false;
         let openTouchId = null;
-        const assignOpenScroll = (y) => {
-            applyingOpenScroll = true;
-            window.scrollTo(0, y);
-            window.setTimeout(() => {
-                applyingOpenScroll = false;
-            }, 0);
-        };
-
+        const scrollLimit = () => Math.max(
+            0,
+            (document.scrollingElement || document.documentElement).scrollHeight - viewHeight()
+        );
         const cancelMobileOpenScroll = () => {
             if (!mobileOpenScroll) return;
-            if (mobileOpenScroll.raf) cancelAnimationFrame(mobileOpenScroll.raf);
+            if (mobileOpenScroll.timer) clearTimeout(mobileOpenScroll.timer);
             mobileOpenScroll = null;
         };
 
-        // Park the white frame one gap under the pinned header. That gap is
-        // the space above the frame (the row gap, or the search-result gap),
-        // so the row or result above ends exactly at the header and is hidden.
-        const scrollOpenedBandIntoView = (frameTop, gapAbove) => {
-            if (window.innerWidth >= MOBILE_BREAKPOINT_PX) return;
+        // Park the white frame one gap under the pinned header. Scroll and
+        // visualViewport events from Safari's toolbar must not cancel it.
+        const scrollOpenedBandIntoView = (frameEl, gapAbove) => {
+            if (window.innerWidth >= MOBILE_BREAKPOINT_PX || !frameEl) return;
             cancelMobileOpenScroll();
-            const targetTop = chromeBottomPx() + Math.max(0, gapAbove || 0);
-            const delta = frameTop - targetTop;
+            const gap = Math.max(0, gapAbove || 0);
+            const wantedTop = () => chromeBottomPx() + gap;
+            const frameTop = frameEl.getBoundingClientRect().top;
+            const delta = frameTop - wantedTop();
             if (Math.abs(delta) <= 1) return;
             const startY = window.scrollY || window.pageYOffset || 0;
-            const maxY = Math.max(
-                0,
-                (document.scrollingElement || document.documentElement).scrollHeight - viewHeight()
-            );
-            const targetY = Math.max(0, Math.min(maxY, startY + delta));
-            if (Math.abs(targetY - startY) <= 1) return;
-            if (reducedMotion) {
-                mobileOpenScroll = { expected: targetY, raf: 0, touchId: openTouchId };
-                assignOpenScroll(targetY);
-                mobileOpenScroll = null;
+            const targetY = Math.max(0, Math.min(scrollLimit(), startY + delta));
+            const settle = () => {
+                if (mobileOpenScroll) {
+                    if (mobileOpenScroll.timer) clearTimeout(mobileOpenScroll.timer);
+                    mobileOpenScroll = null;
+                }
+                if (!frameEl.isConnected) return;
+                const fix = frameEl.getBoundingClientRect().top - wantedTop();
+                if (Math.abs(fix) <= 1) return;
+                const y = window.scrollY || window.pageYOffset || 0;
+                window.scrollTo(0, Math.max(0, Math.min(scrollLimit(), y + fix)));
+            };
+            if (Math.abs(targetY - startY) <= 1 || reducedMotion) {
+                window.scrollTo(0, targetY);
+                settle();
                 return;
             }
-            const state = { expected: startY, raf: 0, touchId: openTouchId };
+            const state = { timer: 0, touchId: openTouchId };
             const t0 = performance.now();
-            const step = (now) => {
+            const step = () => {
                 if (mobileOpenScroll !== state) return;
-                const raw = Math.min(1, (now - t0) / MOBILE_OPEN_SCROLL_MS);
+                const raw = Math.min(1, (performance.now() - t0) / MOBILE_OPEN_SCROLL_MS);
                 const y = startY + (targetY - startY) * easeBezier(MOBILE_SCROLL_EASE, raw);
-                state.expected = y;
-                assignOpenScroll(y);
-                if (raw < 1) state.raf = requestAnimationFrame(step);
-                else mobileOpenScroll = null;
+                window.scrollTo(0, y);
+                if (raw < 1) state.timer = window.setTimeout(step, 16);
+                else settle();
             };
             mobileOpenScroll = state;
-            state.raf = requestAnimationFrame(step);
+            state.timer = window.setTimeout(step, 16);
         };
 
         const searchCopyFields = (slot) => [
@@ -5149,10 +5180,7 @@ function Clothing() {
             if (slot.copyEl) slot.copyEl.style.opacity = '0';
             layoutMobileSearch();
             const rowEl = searchRows[slot.row];
-            if (rowEl) {
-                const frameTop = searchBoard.getBoundingClientRect().top + (parseFloat(rowEl.style.top) || 0);
-                scrollOpenedBandIntoView(frameTop, mobilePhotoGapPx());
-            }
+            if (rowEl) scrollOpenedBandIntoView(rowEl, mobilePhotoGapPx());
             window.setTimeout(() => {
                 if (!slot.searchOpen || !slot.copyEl) return;
                 slot.copyEl.style.transition = 'none';
@@ -5210,8 +5238,14 @@ function Clothing() {
             }
         };
 
-        const dismissGalleryBands = () => {
+        const noteBandClose = (reason) => {
+            if (process.env.NODE_ENV === 'production') return;
+            console.info('[band-close]', reason);
+        };
+
+        const dismissGalleryBands = (reason) => {
             if (!galleryBands.length && !closingBands.length) return;
+            noteBandClose(reason || 'dismiss');
             cancelMobileOpenScroll();
             closingBands.splice(0).forEach(dropBandNodes);
             galleryBands.splice(0).forEach(dropBandNodes);
@@ -5393,12 +5427,15 @@ function Clothing() {
         };
 
         const frameForMobileBand = (spec, aspect) => {
-            const boardW = Math.max(1, section.clientWidth || viewportWidth || window.innerWidth);
-            return fitMobileFrameFor(boardW, spec, aspect, rowGapPx);
+            const boardW = window.innerWidth < MOBILE_BREAKPOINT_PX
+                ? layoutWidth
+                : Math.max(1, section.clientWidth || viewportWidth || window.innerWidth);
+            return fitMobileFrameFor(boardW, spec, aspect, rowGapPx, true);
         };
 
-        const closeGalleryBand = (existing) => {
+        const closeGalleryBand = (existing, reason) => {
             if (!existing || existing.closing || !galleryBands.includes(existing)) return;
+            noteBandClose(reason || 'close');
             cancelMobileOpenScroll();
             existing.closing = true;
             if (existing.slot?.el) existing.slot.el.setAttribute('aria-expanded', 'false');
@@ -5428,7 +5465,7 @@ function Clothing() {
             if (closingBands.some((band) => band.slot === slot && band.key === key)) return;
             const existing = galleryBands.find((band) => band.slot === slot && band.key === key);
             if (existing) {
-                closeGalleryBand(existing);
+                closeGalleryBand(existing, 'tile');
                 return;
             }
             const aspect = slot.aspectRatio || viewerAspect(slot.spec, slot);
@@ -5501,13 +5538,12 @@ function Clothing() {
             photoEl.addEventListener('click', (event) => {
                 event.stopPropagation();
                 if (isGhostClick()) return;
-                closeGalleryBand(band);
+                closeGalleryBand(band, 'photo');
             });
             copy.style.opacity = '0';
             section.classList.add('is-band-slide');
             placeAllGalleryRows(MOBILE_SEARCH_SLIDE_MS, 'ease');
-            const bandBox = bandEl.getBoundingClientRect();
-            scrollOpenedBandIntoView(bandBox.top, rowGapPx);
+            scrollOpenedBandIntoView(bandEl, rowGapPx);
             syncBandLarges();
             window.setTimeout(() => {
                 if (!galleryBands.includes(band) || band.closing) return;
@@ -5711,7 +5747,7 @@ function Clothing() {
 
         const runSearch = async (rawQuery) => {
             if (!searchInput || viewer || searchBusy) return;
-            if (galleryBands.length || closingBands.length) dismissGalleryBands();
+            if (galleryBands.length || closingBands.length) dismissGalleryBands('search');
             const query = String(rawQuery ?? queryFromInput()).trim();
             if (!query) {
                 if (searchActive) await exitSearch();
@@ -5902,6 +5938,7 @@ function Clothing() {
             closeViewer();
         });
         const onKeyDown = (event) => {
+            if (mobileOpenScroll) cancelMobileOpenScroll();
             if (
                 mobileOpenScroll
                 && (event.key === 'ArrowDown'
@@ -5937,6 +5974,13 @@ function Clothing() {
                 searchInput.focus();
             }
         };
+        const swallowGhostClick = (event) => {
+            if (!swallowNextClick) return;
+            swallowNextClick = false;
+            event.preventDefault();
+            event.stopPropagation();
+        };
+        document.addEventListener('click', swallowGhostClick, true);
         document.addEventListener('keydown', onKeyDown);
         if (searchForm) {
             searchForm.addEventListener('submit', onSearchSubmit);
@@ -6017,20 +6061,7 @@ function Clothing() {
         document.addEventListener('visibilitychange', onVisibility);
 
         let scrollFrame = 0;
-        const onScroll = (event) => {
-            const fromVisualViewport = !!(
-                event
-                && window.visualViewport
-                && event.currentTarget === window.visualViewport
-            );
-            if (
-                mobileOpenScroll
-                && !applyingOpenScroll
-                && !fromVisualViewport
-                && Math.abs((window.scrollY || window.pageYOffset || 0) - mobileOpenScroll.expected) > 1.5
-            ) {
-                cancelMobileOpenScroll();
-            }
+        const onScroll = () => {
             if (searchActive) {
                 cacheStreamOrigin();
                 if (fineHover) syncHover();
@@ -6075,6 +6106,7 @@ function Clothing() {
         };
         window.addEventListener('wheel', interruptMobileOpenScroll, { passive: true });
         window.addEventListener('touchstart', interruptMobileOpenScroll, { passive: true });
+        window.addEventListener('touchmove', interruptMobileOpenScroll, { passive: true });
 
         let resizeFrame = 0;
         const onResize = () => {
@@ -6082,7 +6114,9 @@ function Clothing() {
             const width = window.innerWidth;
             const widthChanged = Math.abs(width - layoutWidth) >= 1;
             if (width < MOBILE_BREAKPOINT_PX) {
-                if (!widthChanged) return;
+                // Toolbar and keyboard can nudge the width by a few pixels.
+                // Only a real rotation should recapture the layout size.
+                if (Math.abs(width - layoutWidth) < 48) return;
                 layoutWidth = width;
                 layoutHeight = window.innerHeight;
             } else if (widthChanged) {
@@ -6093,7 +6127,6 @@ function Clothing() {
             resizeFrame = requestAnimationFrame(() => {
                 resizeFrame = 0;
                 if (cancelled || pageIsZoomed()) return;
-                if (galleryBands.length || closingBands.length) dismissGalleryBands();
                 if (!searchActive && layoutWritesQuiet()) return;
                 if (viewer && viewer.phase === 'closing') return;
                 if (searchActive) {
@@ -6192,6 +6225,7 @@ function Clothing() {
             pause();
             intersection.disconnect();
             document.removeEventListener('visibilitychange', onVisibility);
+            document.removeEventListener('click', swallowGhostClick, true);
             document.removeEventListener('keydown', onKeyDown);
             if (searchForm) searchForm.removeEventListener('submit', onSearchSubmit);
             if (searchInput) searchInput.removeEventListener('input', onSearchInput);
@@ -6200,6 +6234,7 @@ function Clothing() {
             window.removeEventListener('scroll', onScroll);
             window.removeEventListener('wheel', interruptMobileOpenScroll);
             window.removeEventListener('touchstart', interruptMobileOpenScroll);
+            window.removeEventListener('touchmove', interruptMobileOpenScroll);
             cancelMobileOpenScroll();
             if (window.visualViewport) {
                 window.visualViewport.removeEventListener('resize', onResize);
