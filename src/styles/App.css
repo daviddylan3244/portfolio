@@ -8,7 +8,22 @@ html {
   min-height: 100%;
 }
 
+@property --sat {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --sab {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
 :root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+
   /* Relative-luminance ratio of Portfolio's gradient to the home page's.
      Level 3 multiplies Portfolio's luminance by this same step. */
   --bg-darken-ratio: 0.322;

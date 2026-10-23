@@ -119,6 +119,12 @@
   top: 2px;
 }
 
+@media (max-width: 767px) {
+  .header-nav {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
   .header-container {
     flex-direction: column;

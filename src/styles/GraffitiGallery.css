@@ -178,6 +178,20 @@
     background: transparent;
 }
 
+.stack-overlay.is-detail-scroll {
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+}
+
+.stack-overlay.is-detail-scroll .stack-overlay-stage {
+    bottom: auto;
+    height: var(--detail-scroll-h, 100%);
+    min-height: 100%;
+}
+
 .stack-page-veil {
     position: absolute;
     inset: 0;

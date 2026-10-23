@@ -92,6 +92,7 @@ export function createTextReveal({
         debug,
         debugLabel,
         sweepWidth,
+        lineStaggerMs,
     } = {}) => {
         clear({ container, textEls, ruleEl, innerEl });
         if (!container) return false;
@@ -138,6 +139,8 @@ export function createTextReveal({
                 layer.style.fontSize = style.fontSize;
                 layer.style.fontStyle = fontStyle;
                 layer.style.fontWeight = style.fontWeight;
+                layer.style.letterSpacing = style.letterSpacing;
+                layer.style.lineHeight = style.lineHeight;
                 pack = { layer, probe: null };
                 layerFor.set(fontStyle, pack);
                 return pack;
@@ -195,8 +198,17 @@ export function createTextReveal({
         }
 
         const sweepSpan = Math.max(1, sweepWidth || maxX);
+        const lineOrder = [];
+        const lineOf = new Map();
         nextGlyphs.forEach((glyph) => {
-            glyph.start = (glyph.x / sweepSpan) * sweepMs;
+            if (!glyph.source || lineOf.has(glyph.source)) return;
+            lineOf.set(glyph.source, lineOrder.length);
+            lineOrder.push(glyph.source);
+        });
+        const stagger = lineStaggerMs > 0 ? lineStaggerMs : 0;
+        nextGlyphs.forEach((glyph) => {
+            const delay = (lineOf.get(glyph.source) || 0) * stagger;
+            glyph.start = delay + (glyph.x / sweepSpan) * sweepMs;
             glyph.end = glyph.start + charMinMs + Math.random() * charExtraMs;
         });
         glyphs = nextGlyphs;

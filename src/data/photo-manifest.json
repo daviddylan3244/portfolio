@@ -802,12 +802,12 @@
   },
   {
     "number": 90,
-    "width": 500,
-    "height": 331,
+    "width": 331,
+    "height": 500,
     "orientation": 1,
-    "displayWidth": 500,
-    "displayHeight": 331,
-    "aspect": 1.510574
+    "displayWidth": 331,
+    "displayHeight": 500,
+    "aspect": 0.662
   },
   {
     "number": 91,
@@ -867,7 +867,7 @@
     "number": 97,
     "width": 331,
     "height": 500,
-    "orientation": 8,
+    "orientation": 1,
     "displayWidth": 331,
     "displayHeight": 500,
     "aspect": 0.662

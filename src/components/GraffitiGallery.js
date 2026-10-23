@@ -76,6 +76,52 @@ const itemGridAspect = (stack, item) => {
 const thumbWidthFor = (vw) => Math.round(Math.min(220, Math.max(165, vw * 0.1146)));
 const textWidthFor = (vw) => Math.round(Math.min(380, Math.max(300, vw * 0.21)));
 
+const readSafe = (name) => {
+    if (typeof document === 'undefined') return 0;
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
+    const value = parseFloat(raw);
+    return Number.isFinite(value) ? value : 0;
+};
+
+const detailIsNarrow = (vw, vh) => vw <= DETAIL_NARROW_PX || vh <= 500;
+
+let copyProbe = null;
+
+const measureDetailCopyHeight = (copy, textW) => {
+    if (!copy || !(textW > 0) || typeof document === 'undefined') return 0;
+    if (!copyProbe) {
+        const probe = document.createElement('div');
+        probe.className = 'stack-detail-copy is-stacked';
+        probe.setAttribute('aria-hidden', 'true');
+        probe.style.position = 'fixed';
+        probe.style.left = '0';
+        probe.style.top = '0';
+        probe.style.visibility = 'hidden';
+        probe.style.pointerEvents = 'none';
+        probe.style.height = 'auto';
+        probe.style.maxHeight = 'none';
+        probe.style.zIndex = '-1';
+        const meta = document.createElement('div');
+        meta.className = 'stack-detail-meta';
+        const title = document.createElement('i');
+        title.className = 'stack-detail-title';
+        const date = document.createElement('div');
+        date.className = 'stack-detail-date';
+        const text = document.createElement('p');
+        text.className = 'stack-detail-text';
+        meta.append(title, date);
+        probe.append(meta, text);
+        document.body.appendChild(probe);
+        copyProbe = { probe, title, date, text };
+    }
+    copyProbe.title.textContent = copy.title || '';
+    copyProbe.date.textContent = copy.date || '';
+    copyProbe.date.style.display = copy.date ? '' : 'none';
+    copyProbe.text.textContent = copy.description || DETAIL_LOREM;
+    copyProbe.probe.style.width = `${Math.round(textW)}px`;
+    return Math.ceil(copyProbe.probe.offsetHeight);
+};
+
 const fitRect = (aspect, maxW, maxH) => {
     const safe = Math.max(0.2, aspect || 1);
     let width = Math.max(1, maxW);
@@ -213,7 +259,7 @@ const detailClosePose = (hero, view, copy, title) => {
     const gap = closeGapFor(vw);
     const minX = CLOSE_BTN_PAD;
     const maxX = vw - CLOSE_BTN_PAD - CLOSE_BTN;
-    const minY = CLOSE_BTN_PAD;
+    const minY = Math.max(CLOSE_BTN_PAD, readSafe('--sat'));
     const maxY = vh - CLOSE_BTN_PAD - CLOSE_BTN;
     let x = clamp(hero.x + hero.w + gap - CLOSE_BTN / 2, minX, maxX);
     let y = clamp(hero.y - gap - CLOSE_BTN / 2, minY, maxY);
@@ -272,7 +318,7 @@ const computeGridLayout = (stack, stage) => {
 
 const computeDetailLayout = (stack, heroIndex, view) => {
     const { vw, vh, margin, titleBottom, menuBottom } = view;
-    const narrow = vw <= DETAIL_NARROW_PX;
+    const narrow = detailIsNarrow(vw, vh);
     const gap = narrow ? 16 : 32;
     const thumbW = narrow
         ? Math.round(Math.min(120, Math.max(88, vw * 0.18)))
@@ -287,27 +333,31 @@ const computeDetailLayout = (stack, heroIndex, view) => {
         const bandTop = titleBottom + 8;
         const bandBottom = vh - margin;
         const bandH = Math.max(160, bandBottom - bandTop);
-        const maxHeroW = vw - margin * 2;
-        const maxHeroH = Math.min(bandH * 0.52, vh * 0.42);
+        const maxHeroW = (vw - margin * 2) * 0.8;
+        const maxHeroH = Math.min(bandH * 0.52, vh * 0.42) * 0.8;
         const hero = fitRect(heroAspect, maxHeroW, maxHeroH);
         const heroX = (vw - hero.w) / 2;
         const heroY = bandTop;
         const textY = heroY + hero.h + 14;
-        const textH = 140;
-        const thumbY = Math.min(bandBottom - thumbW / Math.min(heroAspect, 1.2) - 8, textY + textH + 12);
+        const textH = measureDetailCopyHeight(itemCopy(stack.items[heroIndex]), textW);
+        const thumbY = textY + textH + 16;
         const thumbs = [];
         let x = margin;
+        let maxThumbH = 44;
         stack.items.forEach((item, index) => {
             if (index === heroIndex) {
                 thumbs[index] = null;
                 return;
             }
             const aspect = itemGridAspect(stack, item);
-            const w = thumbW;
-            const h = w / aspect;
+            const w = Math.max(thumbW, 44);
+            const h = Math.max(44, w / aspect);
             thumbs[index] = { x, y: thumbY, w, h, o: 1, role: 'thumb' };
+            maxThumbH = Math.max(maxThumbH, h);
             x += w + 12;
         });
+        const railH = maxThumbH + 8;
+        const contentBottom = thumbY + railH + Math.max(margin, readSafe('--sab'));
         return {
             narrow: true,
             poses: stack.items.map((item, index) => (
@@ -318,11 +368,12 @@ const computeDetailLayout = (stack, heroIndex, view) => {
             copy: { x: margin, y: textY, w: textW, h: textH, stacked: true },
             thumbW,
             textW,
+            extent: contentBottom > vh ? contentBottom : 0,
             rail: {
                 x: margin,
                 y: thumbY,
                 w: vw - margin * 2,
-                h: thumbW + 48,
+                h: railH,
                 pad: 16,
                 gap: 12,
                 contentH: x - margin,
@@ -484,6 +535,7 @@ const GraffitiGallery = () => {
     const [copyVisible, setCopyVisible] = useState(false);
     const [copyBox, setCopyBox] = useState(null);
     const [railBox, setRailBox] = useState(null);
+    const [detailExtent, setDetailExtent] = useState(0);
     const [thumbsDocked, setThumbsDocked] = useState(false);
     const [railCue, setRailCue] = useState(emptyRailCue);
     const [motionGen, setMotionGen] = useState(0);
@@ -491,6 +543,7 @@ const GraffitiGallery = () => {
 
     const buttonsRef = useRef([]);
     const overlayRef = useRef(null);
+    const overlayGestureRef = useRef({ scroll: 0 });
     const closeRef = useRef(null);
     const headRef = useRef(null);
     const navRef = useRef(null);
@@ -546,15 +599,19 @@ const GraffitiGallery = () => {
 
     const viewBox = () => {
         const vw = window.innerWidth;
-        const vh = window.innerHeight;
+        const viewport = window.visualViewport;
+        const rawHeight = window.innerHeight;
+        const vh = detailIsNarrow(vw, viewport?.height || rawHeight) && viewport?.height
+            ? viewport.height
+            : rawHeight;
         const head = headRef.current?.getBoundingClientRect();
         const nav = navRef.current?.getBoundingClientRect();
         return {
             vw,
             vh,
-            margin: vw <= DETAIL_NARROW_PX ? 16 : 28,
+            margin: detailIsNarrow(vw, vh) ? 16 : 28,
             titleBottom: head && head.height > 1 ? head.bottom : predictedTitleBottom(vw),
-            menuBottom: (nav && nav.height > 1 ? nav.bottom : 94) + 10,
+            menuBottom: (nav && nav.height > 1 ? nav.bottom : (head && head.height > 1 ? head.bottom : 94)) + 10,
         };
     };
 
@@ -697,6 +754,8 @@ const GraffitiGallery = () => {
         ) {
             setRailBox(layout.rail);
         }
+        const extent = layout.extent || 0;
+        if ((predicted?.extent || 0) !== extent) setDetailExtent(extent);
         return layout;
     };
 
@@ -742,8 +801,15 @@ const GraffitiGallery = () => {
 
     const measureOnScreen = () => {
         const fallback = posesRef.current.length ? posesRef.current : destRef.current;
-        if (!openDetail) return fallback;
-        return openDetail.items.map((_, index) => {
+        const scroller = overlayRef.current;
+        if (!openDetail) {
+            if (scroller) {
+                scroller.scrollTop = 0;
+                scroller.scrollLeft = 0;
+            }
+            return fallback;
+        }
+        const poses = openDetail.items.map((_, index) => {
             const el = cardRefs.current[index];
             const prev = fallback[index];
             if (!el) return poseOr(prev, destRef.current[index]);
@@ -757,6 +823,11 @@ const GraffitiGallery = () => {
                 role: destRef.current[index]?.role || prev?.role || 'grid',
             };
         });
+        if (scroller) {
+            scroller.scrollTop = 0;
+            scroller.scrollLeft = 0;
+        }
+        return poses;
     };
 
     const applyDockedLayout = () => {
@@ -978,6 +1049,7 @@ const GraffitiGallery = () => {
         setDetailIndex(null);
         setCopyBox(null);
         setRailBox(null);
+        setDetailExtent(0);
         setThumbsDocked(false);
         setRailCue(emptyRailCue);
         setChromeOn(false);
@@ -1017,6 +1089,7 @@ const GraffitiGallery = () => {
         setDetailIndex(nextIndex);
         setCopyBox(layout.copy);
         setRailBox(layout.rail);
+        setDetailExtent(layout.extent || 0);
         railRef.current = layout.rail;
         setThumbsDocked(false);
         setMotionGen((value) => value + 1);
@@ -1194,6 +1267,7 @@ const GraffitiGallery = () => {
             destRef.current = layout.poses;
             setCopyBox(layout.copy);
             setRailBox(layout.rail);
+            setDetailExtent(layout.extent || 0);
             railRef.current = layout.rail;
             const docked = detailIndex != null && thumbsDockedRef.current;
             const token = armBusy();
@@ -1210,7 +1284,12 @@ const GraffitiGallery = () => {
             });
         };
         window.addEventListener('resize', onResize);
-        return () => window.removeEventListener('resize', onResize);
+        const viewport = window.visualViewport;
+        if (viewport) viewport.addEventListener('resize', onResize);
+        return () => {
+            window.removeEventListener('resize', onResize);
+            if (viewport) viewport.removeEventListener('resize', onResize);
+        };
     }, [isOpen, detailIndex, layoutFor]);
 
     useEffect(() => {
@@ -1344,7 +1423,15 @@ const GraffitiGallery = () => {
         }
     };
 
+    const onOverlayPointerDown = () => {
+        overlayGestureRef.current.scroll = overlayRef.current?.scrollTop || 0;
+    };
+
     const onOverlayClick = (event) => {
+        const scrolled = Math.abs(
+            (overlayRef.current?.scrollTop || 0) - (overlayGestureRef.current.scroll || 0)
+        );
+        if (scrolled > 2) return;
         if (event.target.closest('.stack-grid-card')) return;
         if (event.target.closest('.stack-overlay-close')) return;
         if (event.target.closest('.stack-detail-copy')) return;
@@ -1479,13 +1566,17 @@ const GraffitiGallery = () => {
 
             {openDetail ? (
                 <div
-                    className={`stack-overlay${isLeaving ? ' is-leaving' : ''}${chromeOn ? ' is-chrome-on' : ''}${motion.reduced ? ' is-reduced' : ''}${inDetail ? ' is-detail' : ''}`}
-                    style={{ '--chrome-fade-ms': `${CHROME_FADE_MS}ms` }}
+                    className={`stack-overlay${isLeaving ? ' is-leaving' : ''}${chromeOn ? ' is-chrome-on' : ''}${motion.reduced ? ' is-reduced' : ''}${inDetail ? ' is-detail' : ''}${detailExtent > 0 ? ' is-detail-scroll' : ''}`}
+                    style={{
+                        '--chrome-fade-ms': `${CHROME_FADE_MS}ms`,
+                        '--detail-scroll-h': `${detailExtent > 0 ? detailExtent : 0}px`,
+                    }}
                     role="dialog"
                     aria-modal="true"
                     aria-label={openDetail.title}
                     ref={overlayRef}
                     tabIndex={-1}
+                    onPointerDown={onOverlayPointerDown}
                     onClick={onOverlayClick}
                     onKeyDown={onOverlayKeyDown}
                 >
