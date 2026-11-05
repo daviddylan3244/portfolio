@@ -83,9 +83,9 @@ const MOBILE_BREAKPOINT_PX = 768;
 const DESKTOP_POOL_BUFFER = 2;
 const MOBILE_POOL_BUFFER = 0;
 const MOBILE_ROW_BUFFER = 2;
-const DECODE_CONCURRENCY = 6;
-const LOOKAHEAD_SCREENS = 2;
-const FAST_SCROLL_SCREENS = 4;
+const DECODE_CONCURRENCY = 8;
+const LOOKAHEAD_SCREENS = 3;
+const FAST_SCROLL_SCREENS = 6;
 const FAST_SCROLL_PX_PER_SEC = 1400;
 const DECODED_CACHE_LIMIT = 400;
 const READY_POOL_MIN_DESKTOP = 72;
@@ -119,10 +119,10 @@ const CAPTION_RESERVE_PX = CAPTION_GAP_PX + Math.ceil(CAPTION_MAX_FONT_PX * 1.3)
 // Item library — web-sized photos. src = rows, srcFull = enlarged view.
 // Raise PHOTO_COUNT when a new batch is added. Files are photo-1 through photo-N.
 // ---------------------------------------------------------------------------
-const PHOTO_COUNT = 194;
+const PHOTO_COUNT = 236;
 const PHOTO_DIR = '/photos/Website digital/Photography';
-// 4, 47, 50, 78, 110 and 126 are held out on purpose.
-const EXCLUDED_PHOTOS = [4, 47, 50, 78, 110, 126];
+// 4, 47, 50, 78, 110, 126 and 208 are held out on purpose. 208 has no Large file.
+const EXCLUDED_PHOTOS = [4, 47, 50, 78, 110, 126, 208];
 // Skip numbers that are missing from small or Large (177 has neither file).
 const MISSING_PHOTOS = [177];
 
@@ -131,8 +131,8 @@ const STREAM_LIBRARY = Array.from({ length: PHOTO_COUNT }, (_, index) => index +
     .map((number) => ({
         number,
         id: `photo-${number}`,
-        src: `${PHOTO_DIR}/small/small-photo-${number}.jpg`,
-        srcFull: `${PHOTO_DIR}/Large/Large-photo-${number}.jpg`,
+        src: `${PHOTO_DIR}/small/small-photo-${number}.jpg${number === 120 ? '?v=2' : ''}`,
+        srcFull: `${PHOTO_DIR}/Large/Large-photo-${number}.jpg${number === 120 ? '?v=2' : ''}`,
     }));
 
 // Wall label text, keyed by photo number. Returns null when there is no title.
@@ -152,8 +152,29 @@ function photoHasDescription(spec) {
 }
 
 function photoNumberInPath(src) {
-    const match = String(src || '').match(/photo-(\d+)\.jpg$/i);
+    const match = String(src || '').match(/photo-(\d+)\.jpg(?:\?|#|$)/i);
     return match ? Number(match[1]) : null;
+}
+
+// A blank line in the source description is a paragraph break. Photo 233 uses one.
+function setDescriptionText(el, text) {
+    if (!el) return;
+    const value = String(text ?? '').trim();
+    if (!value.includes('\n\n')) {
+        setMarkedText(el, value);
+        return;
+    }
+    el.replaceChildren();
+    value.split(/\n\n+/).forEach((paragraph, index) => {
+        const part = paragraph.trim();
+        if (!part) return;
+        if (el.childNodes.length) {
+            el.append(document.createElement('br'), document.createElement('br'));
+        }
+        const holder = document.createElement('span');
+        setMarkedText(holder, part);
+        while (holder.firstChild) el.append(holder.firstChild);
+    });
 }
 
 if (process.env.NODE_ENV !== 'production') {
@@ -1367,19 +1388,28 @@ function Clothing() {
         const takeReadySpec = (exceptSlot) => {
             const occupied = occupiedKeys(exceptSlot);
             if (exceptSlot?.spec) occupied.add(photoKey(exceptSlot.spec));
+            const pick = () => {
+                for (let i = 0; i < bag.length; i += 1) {
+                    const item = bag[i];
+                    const key = photoKey(item);
+                    if (!key || occupied.has(key)) continue;
+                    const spec = decodedSpecs.get(key);
+                    if (!specIsReady(spec, exceptSlot)) continue;
+                    bag.splice(i, 1);
+                    reserved.add(key);
+                    touchDecoded(key);
+                    return spec;
+                }
+                return null;
+            };
             if (!bag.length) refillBag();
-            for (let i = 0; i < bag.length; i += 1) {
-                const item = bag[i];
-                const key = photoKey(item);
-                if (!key || occupied.has(key)) continue;
-                const spec = decodedSpecs.get(key);
-                if (!specIsReady(spec, exceptSlot)) continue;
-                bag.splice(i, 1);
-                reserved.add(key);
-                touchDecoded(key);
-                return spec;
-            }
-            return null;
+            const first = pick();
+            if (first) return first;
+            // Photos that already left the screen were pulled out of the bag
+            // when they were dealt. Put them back before giving up, or a fast
+            // scroll waits on files that are not decoded yet and the row stays blank.
+            refillBag();
+            return pick();
         };
 
         const readyPoolCount = () => {
@@ -1723,9 +1753,54 @@ function Clothing() {
             || introEntering.has(rowIndex)
             || rowPending.has(rowIndex);
 
+        const reclaimOffscreenSpec = () => {
+            const { first, last } = visibleBounds();
+            const candidates = [];
+            for (let index = 0; index < rows.length; index += 1) {
+                if (!rows[index] || (index >= first && index <= last)) continue;
+                candidates.push(index);
+            }
+            candidates.sort((a, b) => {
+                const da = a < first ? first - a : a - last;
+                const db = b < first ? first - b : b - last;
+                return db - da;
+            });
+            const victimRow = candidates[0];
+            if (victimRow == null) return null;
+            let slot = null;
+            pool.forEach((entry) => {
+                if (entry.row !== victimRow || !slotIsLive(entry) || slotIsHeld(entry) || entry.frozen) return;
+                if (!slot || entry.x > slot.x) slot = entry;
+            });
+            if (!slot) return null;
+            retireSlot(slot);
+            if (rows[victimRow] && (rowNeedsCoverage(victimRow, 'filled') || !pool.some((entry) => entry.row === victimRow && slotIsLive(entry)))) {
+                rows[victimRow].style.visibility = 'hidden';
+            }
+            return takeReadySpec();
+        };
+
+        const dealEdgeSpec = () => dealCoverSpec() || reclaimOffscreenSpec();
+
+        const packChain = (rowIndex) => {
+            const mine = pool
+                .filter((slot) => slot.row === rowIndex && slotIsLive(slot))
+                .sort((a, b) => a.x - b.x);
+            let moved = false;
+            for (let i = 1; i < mine.length; i += 1) {
+                const expected = mine[i - 1].x + mine[i - 1].width + ITEM_GAP_PX;
+                if (mine[i].x <= expected + 1) continue;
+                const delta = expected - mine[i].x;
+                for (let j = i; j < mine.length; j += 1) mine[j].x += delta;
+                moved = true;
+            }
+            if (moved) mine.forEach((slot) => paint(slot));
+        };
+
         const fillRowLeft = (rowIndex) => {
             if (leftFillPaused || gallerySearchFading) return;
             if (rowIndex == null || !rows[rowIndex] || introBlocksFill(rowIndex)) return;
+            packChain(rowIndex);
             for (let n = 0; n < 40; n += 1) {
                 const left = leftmostInRow(rowIndex);
                 if (left && left.x <= -ITEM_GAP_PX) return;
@@ -1735,7 +1810,7 @@ function Clothing() {
                     if (!moveSlotToLeft(reuse, spec)) return;
                     continue;
                 }
-                const spec = dealCoverSpec();
+                const spec = dealEdgeSpec();
                 if (!spec) return;
                 if (!spawnLeftTile(rowIndex, spec)) {
                     releaseReserved(spec);
@@ -1754,7 +1829,7 @@ function Clothing() {
                     if (!right || slot.x + slot.width > right.x + right.width) right = slot;
                 });
                 if (!right || right.x + right.width >= viewportWidth) return;
-                const spec = dealCoverSpec();
+                const spec = dealEdgeSpec();
                 if (!spec) return;
                 const slot = appendSlotToRow(rowIndex, spec, 'right');
                 if (!slot) {
@@ -1965,8 +2040,27 @@ function Clothing() {
             };
             const { first, last } = visibleBounds();
             const span = lookaheadRows();
+            let screenOpen = false;
+            for (let index = first; index <= last; index += 1) {
+                if (!rowIsCovered(index)) {
+                    screenOpen = true;
+                    break;
+                }
+            }
             const rowOrder = [];
             for (let index = first; index <= last; index += 1) rowOrder.push(index);
+            if (screenOpen) {
+                rowOrder.forEach((index) => {
+                    (rowAssignments.get(index) || []).forEach(add);
+                    pool.forEach((slot) => {
+                        if (slot.row !== index || slot.search || !slot.spec) return;
+                        if (slotHasLoadedPhoto(slot)) return;
+                        add(slot.spec);
+                    });
+                });
+                peekUpcoming(photosPerRow() * Math.max(1, last - first + 1)).forEach(add);
+                return pending;
+            }
             if (scrollDir >= 0) {
                 for (let step = 1; step <= span; step += 1) rowOrder.push(last + step);
                 for (let step = 1; step <= 2; step += 1) {
@@ -1994,42 +2088,33 @@ function Clothing() {
         };
 
         let smallPump = null;
+        let pumpAgain = false;
         const pumpSmalls = () => {
-            const pending = collectDecodeQueue();
-            const needReady = readyPoolCount() < readyPoolMin();
-            if ((!pending.length && !needReady) || smallPump) {
-                if (!pending.length && smallsInFlight === 0 && !needReady) prefetchUpcomingLarge();
+            if (smallPump) {
+                pumpAgain = true;
                 return;
             }
-            if (needReady && !bag.length) refillBag();
-            const extras = needReady && !pending.length
-                ? peekUpcoming(readyPoolMin()).filter((item) => {
-                    const key = photoKey(item);
-                    return key && !decodedSpecs.has(key) && !decodePromises.has(key);
-                })
-                : pending;
-            if (!extras.length) {
+            const pending = collectDecodeQueue().slice(0, DECODE_CONCURRENCY);
+            if (!pending.length) {
                 if (smallsInFlight === 0 && readyPoolCount() >= readyPoolMin()) prefetchUpcomingLarge();
                 return;
             }
-            smallPump = mapWithConcurrency(extras, DECODE_CONCURRENCY, decodeSmall).finally(() => {
+            smallPump = mapWithConcurrency(pending, DECODE_CONCURRENCY, decodeSmall).finally(() => {
                 smallPump = null;
-                if (!cancelled && !searchActive) {
+                if (cancelled) return;
+                if (!searchActive) {
                     const { first, last } = visibleBounds();
-                    for (let index = Math.max(0, first - 1); index <= last + 1; index += 1) {
-                        if (!rows[index] || rowPending.has(index) || introPlan.has(index)) continue;
-                        const loaded = pool.some((slot) => (
-                            slot.row === index && slotIsLive(slot) && slotHasLoadedPhoto(slot)
-                        ));
-                        if (!loaded) ensureRow(index);
-                        else {
-                            fillRowLeft(index);
-                            if (!introEntering.has(index)) fillRowRight(index);
-                        }
+                    for (let index = first; index <= last; index += 1) {
+                        if (introPlan.has(index) || introEntering.has(index) || rowPending.has(index)) continue;
+                        ensureRow(index);
                     }
                 }
-                if (collectDecodeQueue().length || readyPoolCount() < readyPoolMin()) pumpSmalls();
-                else if (smallsInFlight === 0) prefetchUpcomingLarge();
+                if (pumpAgain || collectDecodeQueue().length || readyPoolCount() < readyPoolMin()) {
+                    pumpAgain = false;
+                    window.setTimeout(() => {
+                        if (!cancelled) pumpSmalls();
+                    }, 0);
+                } else if (smallsInFlight === 0) prefetchUpcomingLarge();
             });
         };
 
@@ -2804,7 +2889,7 @@ function Clothing() {
             panelYear.hidden = !(info && info.year);
             setMarkedText(panelDetails, details);
             panelDetails.hidden = !details;
-            setMarkedText(panelText, description);
+            setDescriptionText(panelText, description);
             panelText.hidden = !description;
             panelRule.hidden = !description;
             panelLinks.replaceChildren();
@@ -4067,21 +4152,73 @@ function Clothing() {
             rowAssignments.delete(index);
         };
 
+        const rowIsCovered = (rowIndex) => {
+            const rowEl = rows[rowIndex];
+            if (!rowEl || rowEl.style.visibility === 'hidden') return false;
+            if (rowNeedsCoverage(rowIndex, 'filled')) return false;
+            const mine = pool.filter((slot) => slot.row === rowIndex && slotIsLive(slot));
+            return mine.length > 0 && mine.every((slot) => slotHasLoadedPhoto(slot));
+        };
+
+        // Fill from photos that are already decoded. A row stays hidden until
+        // it is covered, so a blank or half-filled band is never what paints.
+        // The intro still owns its rows through startRow.
+        const fillRowNow = (rowIndex) => {
+            const rowEl = rows[rowIndex];
+            if (!rowEl || cancelled || rowLayoutQuiet(rowIndex)) return false;
+            if (introPlan.has(rowIndex) && pageScroll() < 8) return false;
+            if (introEntering.has(rowIndex) || rowPending.has(rowIndex)) return false;
+            if (rowIsCovered(rowIndex)) return true;
+            packChain(rowIndex);
+            startedRows.add(rowIndex);
+            for (let n = 0; n < 40 && rowNeedsCoverage(rowIndex, 'filled'); n += 1) {
+                const spec = takeReadySpec() || reclaimOffscreenSpec();
+                if (!spec) break;
+                const mine = pool.filter((slot) => slot.row === rowIndex && slotIsLive(slot));
+                const minX = mine.length ? Math.min(...mine.map((slot) => slot.x)) : 0;
+                const side = minX > -ITEM_GAP_PX ? 'left' : 'right';
+                const slot = appendSlotToRow(rowIndex, spec, side);
+                if (!slot) {
+                    releaseReserved(spec);
+                    break;
+                }
+            }
+            const mine = pool.filter((slot) => slot.row === rowIndex && slotIsLive(slot));
+            const covered = mine.length > 0
+                && mine.every((slot) => slotHasLoadedPhoto(slot))
+                && !rowNeedsCoverage(rowIndex, 'filled');
+            if (covered) {
+                rowEl.style.visibility = '';
+                if (!running) syncPlayback();
+                if (viewer) applyRows(viewer.rowAmount || 0);
+                return true;
+            }
+            rowEl.style.visibility = 'hidden';
+            if (!mine.length) startedRows.delete(rowIndex);
+            return false;
+        };
+
         const ensureRow = (index) => {
             if (!rows[index]) {
                 const rowEl = acquireRow();
                 rowEl.dataset.rowIndex = String(index);
+                if (!(introPlan.has(index) && pageScroll() < 8)) rowEl.style.visibility = 'hidden';
                 section.appendChild(rowEl);
                 rows[index] = rowEl;
                 rowPose[index] = { ty: 0, scale: 1 };
             }
             placeRow(index);
-            const live = pool.some((slot) => slot.row === index && slotIsLive(slot));
-            if (startedRows.has(index) && live) return;
-            if (rowPending.has(index)) return;
             if (introPlan.has(index) && pageScroll() < 8) return;
+            if (introEntering.has(index) || rowPending.has(index)) return;
             if (introPlan.has(index)) introPlan.delete(index);
-            startRow(index, 'filled');
+            // Repeat visits still wait on startRow before the section is shown.
+            if (bootPromises) {
+                const live = pool.some((slot) => slot.row === index && slotIsLive(slot));
+                if (startedRows.has(index) && live) return;
+                startRow(index, 'filled');
+                return;
+            }
+            fillRowNow(index);
         };
 
         const growSection = (throughIndex) => {
@@ -4092,22 +4229,42 @@ function Clothing() {
         };
 
         let mountedKey = '';
+        let mountedSpan = '';
+        let aheadToken = 0;
         const mountRange = () => {
-            if (layoutWritesQuiet()) return;
             const { first, last } = visibleBounds();
-            const buffer = window.innerWidth <= MOBILE_BREAKPOINT_PX ? MOBILE_ROW_BUFFER : ROW_BUFFER;
-            const from = Math.max(0, first - buffer);
-            const to = last + buffer;
-            mountedKey = `${first}:${last}`;
-            growSection(to + lookaheadRows());
-            pumpSmalls();
-            for (let index = from; index <= to; index += 1) {
-                ensureRow(index);
-            }
+            const aheadRows = lookaheadRows();
+            const to = last + aheadRows;
+            mountedSpan = `${first}:${last}`;
+            mountedKey = mountedSpan;
+            growSection(to);
+            // Unload every off-screen row before filling the destination. A
+            // short jump used to keep a full screen of old rows, and those
+            // rows held every decoded photo, so the rows that entered stayed blank.
             for (let index = 0; index < rows.length; index += 1) {
                 if (!rows[index]) continue;
-                if (index < from || index > to) removeRow(index);
+                if (index < first || index > last) removeRow(index);
             }
+            for (let index = first; index <= last; index += 1) ensureRow(index);
+            if (last + 1 <= to && readyPoolCount() > photosPerRow()) ensureRow(last + 1);
+            const token = aheadToken + 1;
+            aheadToken = token;
+            const restFrom = last + 2;
+            const fillAhead = (start) => {
+                if (cancelled || token !== aheadToken || searchActive) return;
+                if (readyPoolCount() <= photosPerRow()) {
+                    if (decodedSpecs.size < STREAM_LIBRARY.length - 2) {
+                        window.setTimeout(() => fillAhead(start), 120);
+                    }
+                    return;
+                }
+                const end = Math.min(to, start + 1);
+                for (let index = start; index <= end; index += 1) ensureRow(index);
+                if (end < to) window.setTimeout(() => fillAhead(end + 1), 0);
+            };
+            if (restFrom <= to) window.setTimeout(() => fillAhead(restFrom), 0);
+            if (first > 0 && readyPoolCount() > photosPerRow()) ensureRow(first - 1);
+            pumpSmalls();
             const keep = new Set();
             pool.forEach((slot) => {
                 const key = photoKey(slot.spec);
@@ -4122,7 +4279,7 @@ function Clothing() {
             [...reserved].forEach((key) => {
                 if (!keep.has(key)) reserved.delete(key);
             });
-            repairVisibleRows(from, to);
+            repairVisibleRows(first, last);
         };
 
         const introProtect = (index) => introPlan.has(index) && pageScroll() < 8;
@@ -4198,7 +4355,7 @@ function Clothing() {
                     warnRowRepair(index, 'empty', {
                         detached: pool.filter((slot) => slot.row === index).length,
                     });
-                    startRow(index, 'filled');
+                    fillRowNow(index);
                     continue;
                 }
                 fillRowLeft(index);
@@ -5058,7 +5215,7 @@ function Clothing() {
             year.hidden = !(info && info.year);
             setMarkedText(detailEl, details);
             detailEl.hidden = !details;
-            setMarkedText(text, description);
+            setDescriptionText(text, description);
             text.hidden = !description;
             rule.hidden = !description;
             links.forEach((link) => {
@@ -5666,9 +5823,7 @@ function Clothing() {
             if (!rows[rowIndex]) ensureRow(rowIndex);
             const live = pool.filter((slot) => slot.row === rowIndex && slotIsLive(slot));
             if (!live.length) {
-                if (!rowPending.has(rowIndex) && !startedRows.has(rowIndex)) {
-                    startRow(rowIndex, 'filled');
-                }
+                fillRowNow(rowIndex);
                 return;
             }
             fillRowLeft(rowIndex);
@@ -6068,7 +6223,6 @@ function Clothing() {
                 return;
             }
             if (suppressScroll || scrollLockY != null || pageIsZoomed()) return;
-            if (layoutWritesQuiet()) return;
             if (viewer && viewer.phase === 'closing') return;
             const y = pageScroll();
             const t = performance.now();
@@ -6083,13 +6237,21 @@ function Clothing() {
             scrollFrame = requestAnimationFrame(() => {
                 scrollFrame = 0;
                 if (cancelled || suppressScroll || scrollLockY != null) return;
-                if (layoutWritesQuiet()) return;
                 if (viewer && viewer.phase === 'closing') return;
                 pumpSmalls();
                 syncBandLarges();
                 const { first, last } = visibleBounds();
-                if (`${first}:${last}` !== mountedKey) mountRange();
-                else repairVisibleRows();
+                let hole = `${first}:${last}` !== mountedSpan;
+                if (!hole) {
+                    for (let index = first; index <= last; index += 1) {
+                        if (!rowIsCovered(index)) {
+                            hole = true;
+                            break;
+                        }
+                    }
+                }
+                if (hole) mountRange();
+                else repairVisibleRows(first, last);
             });
         };
         window.addEventListener('scroll', onScroll, { passive: true });
