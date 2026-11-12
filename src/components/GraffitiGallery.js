@@ -5,7 +5,7 @@ import '../styles/Header.css';
 import '../styles/Portfolio.css';
 import '../styles/GraffitiGallery.css';
 import designStacks from '../data/design-stacks.json';
-import { createTextReveal } from '../utils/textReveal';
+import { createTextReveal, setDescriptionText } from '../utils/textReveal';
 
 const CAROUSEL_INTERVAL_MS = 1000;
 const SWAP_MS = 450;
@@ -42,19 +42,28 @@ const aspectOf = (item) => {
     return 1;
 };
 
+const usesOwnCard = (stack, item) => (
+    stack.cardShape === 'fixed'
+    && stack.fit === 'cover'
+    && stack.cardAspect > 1
+    && aspectOf(item) < 1
+);
+
 const pileFit = (item, stack) => {
     if (stack.cardShape === 'square') return { w: 1, h: 1 };
-    const aspect = stack.cardAspect > 0 ? stack.cardAspect : aspectOf(item);
+    const aspect = usesOwnCard(stack, item)
+        ? aspectOf(item)
+        : (stack.cardAspect > 0 ? stack.cardAspect : aspectOf(item));
     if (aspect >= 1) return { w: 1, h: 1 / aspect };
     return { w: aspect, h: 1 };
 };
 
-const cardClassNames = (stack, extra = []) => {
+const cardClassNames = (stack, extra = [], item = null) => {
     const names = [
         stack.cardShape === 'square' ? 'is-square' : '',
         stack.cardShape === 'fixed' ? 'is-fixed' : '',
         stack.cardShape === 'natural' ? 'is-natural' : '',
-        stack.fit === 'cover' ? 'is-cover' : '',
+        stack.fit === 'cover' && !(item && usesOwnCard(stack, item)) ? 'is-cover' : '',
         stack.frame === 'thin-white' ? 'is-framed' : '',
         ...extra,
     ];
@@ -68,6 +77,7 @@ const itemCopy = (item) => ({
 });
 
 const itemGridAspect = (stack, item) => {
+    if (usesOwnCard(stack, item)) return aspectOf(item);
     if (stack.cardShape === 'square') return 1;
     if (stack.cardAspect > 0) return stack.cardAspect;
     return aspectOf(item);
@@ -117,7 +127,7 @@ const measureDetailCopyHeight = (copy, textW) => {
     copyProbe.title.textContent = copy.title || '';
     copyProbe.date.textContent = copy.date || '';
     copyProbe.date.style.display = copy.date ? '' : 'none';
-    copyProbe.text.textContent = copy.description || DETAIL_LOREM;
+    setDescriptionText(copyProbe.text, copy.description || DETAIL_LOREM);
     copyProbe.probe.style.width = `${Math.round(textW)}px`;
     return Math.ceil(copyProbe.probe.offsetHeight);
 };
@@ -1292,6 +1302,11 @@ const GraffitiGallery = () => {
         };
     }, [isOpen, detailIndex, layoutFor]);
 
+    useLayoutEffect(() => {
+        if (!inDetail || !textRef.current) return;
+        setDescriptionText(textRef.current, copy?.description || DETAIL_LOREM);
+    }, [inDetail, copy?.description, detailIndex]);
+
     useEffect(() => {
         const container = copyRef.current;
         if (!copyVisible || detailIndex == null || !container) return undefined;
@@ -1538,7 +1553,7 @@ const GraffitiGallery = () => {
                                         return (
                                             <span
                                                 key={itemIndex}
-                                                className={`stack-card ${cardClassNames(stack)}`}
+                                                className={`stack-card ${cardClassNames(stack, [], item)}`}
                                                 style={{
                                                     zIndex: stack.items.length - depth,
                                                     '--fit-w': String(fit.w),
@@ -1692,7 +1707,7 @@ const GraffitiGallery = () => {
                                             role === 'pile' ? 'is-pile' : '',
                                             docked ? 'is-docked' : '',
                                             hot ? 'is-hot' : '',
-                                        ])}`}
+                                        ], item)}`}
                                         style={{
                                             '--delay': `${itemIndex * OPEN_STAGGER_MS}ms`,
                                             '--aspect': String(aspect),
@@ -1743,9 +1758,7 @@ const GraffitiGallery = () => {
                                     className="stack-detail-text"
                                     ref={textRef}
                                     aria-hidden={copy.description ? undefined : 'true'}
-                                >
-                                    {copy.description || DETAIL_LOREM}
-                                </p>
+                                />
                             </div>
                         ) : null}
                     </div>

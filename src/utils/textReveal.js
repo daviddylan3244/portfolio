@@ -39,6 +39,26 @@ export function setMarkedText(el, text) {
     });
 }
 
+export function setDescriptionText(el, text) {
+    if (!el) return;
+    const value = String(text ?? '').trim();
+    if (!value.includes('\n\n')) {
+        setMarkedText(el, value);
+        return;
+    }
+    el.replaceChildren();
+    value.split(/\n\n+/).forEach((paragraph) => {
+        const part = paragraph.trim();
+        if (!part) return;
+        if (el.childNodes.length) {
+            el.append(document.createElement('br'), document.createElement('br'));
+        }
+        const holder = document.createElement('span');
+        setMarkedText(holder, part);
+        while (holder.firstChild) el.append(holder.firstChild);
+    });
+}
+
 export function createTextReveal({
     overlayClass = 'stream-panel-scramble',
     layerClass = 'stream-panel-scramble-layer',

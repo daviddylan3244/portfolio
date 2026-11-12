@@ -2113,5 +2113,23 @@
     "displayWidth": 500,
     "displayHeight": 332,
     "aspect": 1.506024
+  },
+  {
+    "number": 237,
+    "width": 500,
+    "height": 332,
+    "orientation": 1,
+    "displayWidth": 500,
+    "displayHeight": 332,
+    "aspect": 1.506024
+  },
+  {
+    "number": 238,
+    "width": 500,
+    "height": 291,
+    "orientation": 1,
+    "displayWidth": 500,
+    "displayHeight": 291,
+    "aspect": 1.718213
   }
 ]

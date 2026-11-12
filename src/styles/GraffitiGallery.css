@@ -457,6 +457,10 @@
     margin: 0.85em 0 0;
 }
 
+.stack-detail-text em {
+    font-style: italic;
+}
+
 .stack-detail-copy .stream-panel-scramble {
     position: absolute;
     top: 0;

@@ -119,7 +119,7 @@ const CAPTION_RESERVE_PX = CAPTION_GAP_PX + Math.ceil(CAPTION_MAX_FONT_PX * 1.3)
 // Item library — web-sized photos. src = rows, srcFull = enlarged view.
 // Raise PHOTO_COUNT when a new batch is added. Files are photo-1 through photo-N.
 // ---------------------------------------------------------------------------
-const PHOTO_COUNT = 236;
+const PHOTO_COUNT = 238;
 const PHOTO_DIR = '/photos/Website digital/Photography';
 // 4, 47, 50, 78, 110, 126 and 208 are held out on purpose. 208 has no Large file.
 const EXCLUDED_PHOTOS = [4, 47, 50, 78, 110, 126, 208];
