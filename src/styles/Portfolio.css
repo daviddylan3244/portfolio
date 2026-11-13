@@ -11,7 +11,7 @@ li {
 }
 
 .resume-container {
-  --resume-width: min(1600px, 85vw);
+  --resume-width: min(1300px, 90vw);
   width: var(--resume-width);
   max-width: 1600px;
   margin-left: calc((100vw - var(--resume-width)) / 2);
@@ -43,30 +43,28 @@ li {
 
 .resume-intro {
   display: grid;
-  grid-template-columns: auto minmax(0, 680px);
+  grid-template-columns: 280px minmax(0, 1fr);
   align-items: stretch;
   justify-content: center;
   gap: 48px;
-  margin-bottom: 3.5rem;
-  padding-bottom: 2.5rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  max-width: 1000px;
+  margin-inline: auto;
+  margin-bottom: 2.5rem;
 }
 
 .contact-section {
   background-color: #111111;
   border-radius: 8px;
-  padding: 40px;
+  padding: 32px;
   width: 100%;
-  max-width: 680px;
-  flex: 0 1 680px;
   min-width: 0;
 }
 
 .resume-portrait-frame {
   position: relative;
-  height: 100%;
+  width: 100%;
+  height: auto;
   aspect-ratio: 3 / 4;
-  width: auto;
   min-width: 0;
   min-height: 0;
 }
@@ -143,6 +141,12 @@ li {
   margin-top: 3.75rem;
 }
 
+.resume-intro + .resume-section {
+  margin-top: 0;
+  padding-top: 3.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
 .resume-section h2 {
   font-size: 1.8rem;
   margin-bottom: 2rem;
@@ -197,7 +201,7 @@ li {
 }
 
 .resume-role-intro {
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.68);
   line-height: 1.6;
   margin-bottom: 0.85rem;
 }
@@ -246,6 +250,21 @@ li {
   font-size: 1.05rem;
   line-height: 1.65;
   color: rgba(255, 255, 255, 0.88);
+}
+
+.resume-container .resume-bio,
+.resume-container .resume-role-intro,
+.resume-container .resume-note,
+.resume-container li,
+.resume-container .skill-group p,
+.resume-container .outside-copy {
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+}
+
+.resume-container .resume-bio {
+  font-size: 1rem;
 }
 
 @media (max-width: 768px) {
