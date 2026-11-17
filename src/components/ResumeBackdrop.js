@@ -62,6 +62,8 @@ const LIBRARY = backdropList.map((entry) => ({
 
 const FADE_MS = 1500;
 const DECODE_CONCURRENCY = 6;
+const IMAGE_WAIT_MS = 4000;
+const BATCH_WAIT_MS = 8000;
 const RESIZE_DEBOUNCE_MS = 200;
 const HEIGHT_IGNORE_PX = 150;
 
@@ -213,6 +215,33 @@ function buildPlan(viewportWidth, metrics, design) {
   return rows.filter((row) => row.placed && row.placed.length);
 }
 
+function whenImageReady(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      resolve();
+    };
+    const timer = window.setTimeout(finish, IMAGE_WAIT_MS);
+    img.onload = finish;
+    img.onerror = finish;
+    img.decoding = 'async';
+    img.src = url;
+    if (img.complete) {
+      finish();
+      return;
+    }
+    if (typeof img.decode === 'function') {
+      img.decode().then(finish, finish);
+    }
+  });
+}
+
 function decodeAll(urls, isCurrent) {
   let index = 0;
   const worker = async () => {
@@ -220,23 +249,19 @@ function decodeAll(urls, isCurrent) {
       if (!isCurrent()) return;
       const url = urls[index];
       index += 1;
-      const img = new Image();
-      img.decoding = 'async';
-      img.src = url;
-      try {
-        await img.decode();
-      } catch (err) {
-        await new Promise((resolve) => {
-          img.onload = () => resolve();
-          img.onerror = () => resolve();
-        });
-      }
+      await whenImageReady(url);
     }
   };
   const count = Math.min(DECODE_CONCURRENCY, urls.length);
   const workers = [];
   for (let i = 0; i < count; i += 1) workers.push(worker());
-  return Promise.all(workers);
+  let timer = 0;
+  const safety = new Promise((resolve) => {
+    timer = window.setTimeout(resolve, BATCH_WAIT_MS);
+  });
+  return Promise.race([Promise.all(workers), safety]).finally(() => {
+    window.clearTimeout(timer);
+  });
 }
 
 function ResumeBackdrop() {
@@ -284,6 +309,9 @@ function ResumeBackdrop() {
           img.decoding = 'async';
           img.fetchPriority = 'low';
           img.setAttribute('fetchpriority', 'low');
+          img.onerror = () => {
+            img.style.visibility = 'hidden';
+          };
           img.src = item.src;
           img.style.left = `${left}px`;
           img.style.top = `${item.top}px`;
