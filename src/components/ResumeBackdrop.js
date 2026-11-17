@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import backdropPhotos from '../data/backdrop-photos.json';
+import backdropSprite from '../assets/backdrop-sprite.jpg';
 import '../styles/ResumeBackdrop.css';
 
 // Production uses this. In development, ?design=1 or ?design=2 overrides it.
@@ -52,18 +53,17 @@ const LABEL_BREATH_PX = 4;
 const VIEWER_BORDER_MIN_PX = 12;
 const VIEWER_BORDER_MAX_PX = 48;
 
-const PHOTO_DIR = '/photos/Website digital/Photography/backdrop';
-const backdropList = Array.isArray(backdropPhotos) ? backdropPhotos : backdropPhotos.photos;
-const LIBRARY = backdropList.map((entry) => ({
-  number: entry.number,
-  aspect: entry.aspect,
-  src: `${PHOTO_DIR}/backdrop-photo-${entry.number}.jpg`,
+const SPRITE_WIDTH = backdropPhotos.spriteWidth;
+const SPRITE_HEIGHT = backdropPhotos.spriteHeight;
+const LIBRARY = backdropPhotos.photos.map((entry) => ({
+  x: entry.x,
+  y: entry.y,
+  sheetWidth: entry.width,
+  sheetHeight: entry.height,
 }));
 
-const FADE_MS = 1500;
-const DECODE_CONCURRENCY = 6;
+const FADE_MS = 400;
 const IMAGE_WAIT_MS = 4000;
-const BATCH_WAIT_MS = 8000;
 const RESIZE_DEBOUNCE_MS = 200;
 const HEIGHT_IGNORE_PX = 150;
 
@@ -144,11 +144,14 @@ function metricsFor(viewportWidth, viewportHeight, design) {
 function makeItem(spec, rowPhotoHeight, bandHeight, baseGap, design) {
   const jitter = 1 + (Math.random() * 2 - 1) * design.photoSizeJitter;
   const height = rowPhotoHeight * jitter;
-  const width = Math.max(1, height * (spec.aspect || 1.5));
+  const width = Math.max(1, height * (spec.sheetWidth / spec.sheetHeight));
   const gapScale = design.gapMin + Math.random() * (design.gapMax - design.gapMin);
   const room = bandHeight - height;
   return {
-    src: spec.src,
+    x: spec.x,
+    y: spec.y,
+    sheetWidth: spec.sheetWidth,
+    sheetHeight: spec.sheetHeight,
     width,
     height,
     gap: baseGap * gapScale,
@@ -219,48 +222,28 @@ function whenImageReady(url) {
   return new Promise((resolve) => {
     const img = new Image();
     let settled = false;
-    const finish = () => {
+    const finish = (ok) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
       img.onload = null;
       img.onerror = null;
-      resolve();
+      resolve(Boolean(ok && img.naturalWidth > 0));
     };
-    const timer = window.setTimeout(finish, IMAGE_WAIT_MS);
-    img.onload = finish;
-    img.onerror = finish;
+    const timer = window.setTimeout(() => finish(false), IMAGE_WAIT_MS);
+    img.onload = () => finish(true);
+    img.onerror = () => finish(false);
     img.decoding = 'async';
+    img.fetchPriority = 'low';
+    img.setAttribute('fetchpriority', 'low');
     img.src = url;
     if (img.complete) {
-      finish();
+      finish(img.naturalWidth > 0);
       return;
     }
     if (typeof img.decode === 'function') {
-      img.decode().then(finish, finish);
+      img.decode().then(() => finish(true), () => finish(false));
     }
-  });
-}
-
-function decodeAll(urls, isCurrent) {
-  let index = 0;
-  const worker = async () => {
-    while (index < urls.length) {
-      if (!isCurrent()) return;
-      const url = urls[index];
-      index += 1;
-      await whenImageReady(url);
-    }
-  };
-  const count = Math.min(DECODE_CONCURRENCY, urls.length);
-  const workers = [];
-  for (let i = 0; i < count; i += 1) workers.push(worker());
-  let timer = 0;
-  const safety = new Promise((resolve) => {
-    timer = window.setTimeout(resolve, BATCH_WAIT_MS);
-  });
-  return Promise.race([Promise.all(workers), safety]).finally(() => {
-    window.clearTimeout(timer);
   });
 }
 
@@ -273,8 +256,7 @@ function ResumeBackdrop() {
 
     let dead = false;
     let generation = 0;
-    let idleId = 0;
-    let idleTimer = 0;
+    let spriteReady = false;
     let resizeTimer = 0;
     let layoutWidth = 0;
     let layoutHeight = 0;
@@ -303,21 +285,16 @@ function ResumeBackdrop() {
         strip.style.width = `${row.copyWidth * 2}px`;
 
         const addPhoto = (item, left) => {
-          const img = document.createElement('img');
-          img.alt = '';
-          img.draggable = false;
-          img.decoding = 'async';
-          img.fetchPriority = 'low';
-          img.setAttribute('fetchpriority', 'low');
-          img.onerror = () => {
-            img.style.visibility = 'hidden';
-          };
-          img.src = item.src;
-          img.style.left = `${left}px`;
-          img.style.top = `${item.top}px`;
-          img.style.width = `${item.width}px`;
-          img.style.height = `${item.height}px`;
-          strip.appendChild(img);
+          const tile = document.createElement('div');
+          tile.className = 'resume-backdrop-tile';
+          const scale = item.height / item.sheetHeight;
+          tile.style.left = `${left}px`;
+          tile.style.top = `${item.top}px`;
+          tile.style.width = `${item.width}px`;
+          tile.style.height = `${item.height}px`;
+          tile.style.backgroundSize = `${SPRITE_WIDTH * scale}px ${SPRITE_HEIGHT * scale}px`;
+          tile.style.backgroundPosition = `${-item.x * scale}px ${-item.y * scale}px`;
+          strip.appendChild(tile);
         };
         row.placed.forEach((item) => {
           addPhoto(item, item.left);
@@ -359,7 +336,7 @@ function ResumeBackdrop() {
       animations = next;
     };
 
-    const layout = async () => {
+    const layout = () => {
       const gen = generation + 1;
       generation = gen;
       const design = resolveDesign();
@@ -368,16 +345,6 @@ function ResumeBackdrop() {
       const viewportHeight = root.clientHeight || window.innerHeight;
       const metrics = metricsFor(viewportWidth, viewportHeight, design);
       const rows = buildPlan(viewportWidth, metrics, design);
-      const urls = [];
-      const seen = new Set();
-      rows.forEach((row) => {
-        row.placed.forEach((item) => {
-          if (seen.has(item.src)) return;
-          seen.add(item.src);
-          urls.push(item.src);
-        });
-      });
-      await decodeAll(urls, () => !dead && gen === generation);
       if (dead || gen !== generation) return;
       clearRows();
       mount(rows, metrics, reduced);
@@ -385,40 +352,33 @@ function ResumeBackdrop() {
       layoutHeight = window.innerHeight;
     };
 
-    const afterIdle = () => new Promise((resolve) => {
-      if (typeof window.requestIdleCallback === 'function') {
-        idleId = window.requestIdleCallback(() => resolve(), { timeout: 1000 });
-      } else {
-        idleTimer = window.setTimeout(resolve, 200);
-      }
-    });
-
     const boot = async () => {
-      if (document.readyState !== 'complete') {
-        await new Promise((resolve) => {
-          window.addEventListener('load', resolve, { once: true });
-        });
-      }
-      if (dead) return;
-      await afterIdle();
-      if (dead) return;
-      await layout();
+      const ready = await whenImageReady(backdropSprite);
+      if (dead || !ready) return;
+      spriteReady = true;
+      root.style.setProperty('--backdrop-sprite', `url("${backdropSprite}")`);
+      layout();
+    };
+
+    const sizeChanged = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      return width !== layoutWidth || Math.abs(height - layoutHeight) >= HEIGHT_IGNORE_PX;
     };
 
     const onResize = () => {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      if (layoutWidth && width === layoutWidth && Math.abs(height - layoutHeight) < HEIGHT_IGNORE_PX) {
-        return;
-      }
+      if (!layoutWidth) return;
+      if (!sizeChanged()) return;
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
-        if (!dead) layout();
+        if (dead || !spriteReady || !layoutWidth) return;
+        if (!sizeChanged()) return;
+        layout();
       }, RESIZE_DEBOUNCE_MS);
     };
 
     const onMotion = () => {
-      if (!dead) layout();
+      if (!dead && spriteReady) layout();
     };
 
     window.addEventListener('resize', onResize);
@@ -430,10 +390,6 @@ function ResumeBackdrop() {
       dead = true;
       generation += 1;
       window.clearTimeout(resizeTimer);
-      window.clearTimeout(idleTimer);
-      if (idleId && typeof window.cancelIdleCallback === 'function') {
-        window.cancelIdleCallback(idleId);
-      }
       window.removeEventListener('resize', onResize);
       window.visualViewport?.removeEventListener('resize', onResize);
       motionQuery.removeEventListener?.('change', onMotion);

@@ -4,9 +4,13 @@ const sharp = require('sharp');
 
 // Output size and the baked-in distance look. Sigma is a fraction of HEIGHT.
 const HEIGHT = 128;
-const BLUR_RATIO = 0.04;
+const BLUR_RATIO = 0.02;
 const SATURATION = 0.7;
 const JPEG_QUALITY = 70;
+// Empty gutter so a scaled tile can sample past its rect without hitting a neighbor.
+const GAP = 4;
+const PAD = GAP / 2;
+const MAX_EDGE = 4096;
 
 // Keep in sync with EXCLUDED_PHOTOS in Clothing.js.
 const EXCLUDED_PHOTOS = [4, 47, 50, 78, 110, 126, 208];
@@ -15,7 +19,8 @@ const MISSING_PHOTOS = [177];
 
 const root = path.join(__dirname, '..');
 const smallDir = path.join(root, 'public', 'photos', 'Website digital', 'Photography', 'small');
-const outDir = path.join(root, 'public', 'photos', 'Website digital', 'Photography', 'backdrop');
+const legacyDir = path.join(root, 'public', 'photos', 'Website digital', 'Photography', 'backdrop');
+const spritePath = path.join(root, 'src', 'assets', 'backdrop-sprite.jpg');
 const manifestPath = path.join(root, 'src', 'data', 'photo-manifest.json');
 const jsonPath = path.join(root, 'src', 'data', 'backdrop-photos.json');
 
@@ -46,61 +51,178 @@ function settingsMatch(saved) {
     && saved.blurRatio === BLUR_RATIO
     && saved.saturation === SATURATION
     && saved.jpegQuality === JPEG_QUALITY
+    && saved.gap === GAP
+    && saved.maxEdge === MAX_EDGE
   );
 }
 
-async function main() {
-  fs.mkdirSync(outDir, { recursive: true });
-  const names = fs.readdirSync(smallDir).filter((name) => photoNumber(name) != null);
-  const numbers = names
+function listNumbers() {
+  return fs.readdirSync(smallDir)
     .map(photoNumber)
-    .filter((number) => !skip.has(number))
+    .filter((number) => number != null && !skip.has(number))
     .sort((a, b) => a - b);
+}
 
-  const settingsCurrent = settingsMatch(savedSettings());
-  let wrote = 0;
-  let reused = 0;
-  const listed = [];
-
-  for (const number of numbers) {
+function isFresh(saved, numbers) {
+  if (!settingsMatch(saved) || !fs.existsSync(spritePath)) return false;
+  if (!saved.spriteWidth || !saved.spriteHeight || !Array.isArray(saved.photos)) return false;
+  if (saved.photos.length !== numbers.length) return false;
+  for (let i = 0; i < numbers.length; i += 1) {
+    const photo = saved.photos[i];
+    if (photo.number !== numbers[i] || !(photo.width > 0) || !(photo.height > 0)) return false;
+  }
+  const spriteTime = fs.statSync(spritePath).mtimeMs;
+  return numbers.every((number) => {
     const smallPath = path.join(smallDir, `small-photo-${number}.jpg`);
-    const outPath = path.join(outDir, `backdrop-photo-${number}.jpg`);
-    const smallTime = fs.statSync(smallPath).mtimeMs;
-    const fresh = settingsCurrent
-      && fs.existsSync(outPath)
-      && fs.statSync(outPath).mtimeMs >= smallTime;
-    if (!fresh) {
-      const sigma = HEIGHT * BLUR_RATIO;
-      await sharp(smallPath)
-        .rotate()
-        .resize({ height: HEIGHT })
-        .modulate({ saturation: SATURATION })
-        .blur(sigma)
-        .jpeg({ quality: JPEG_QUALITY })
-        .toFile(outPath);
-      wrote += 1;
-    } else {
-      reused += 1;
+    return fs.statSync(smallPath).mtimeMs <= spriteTime;
+  });
+}
+
+function pack(photos) {
+  const rows = [];
+  let row = [];
+  let rowWidth = 0;
+  photos.forEach((photo) => {
+    if (photo.width + PAD * 2 > MAX_EDGE) {
+      throw new Error(`Photo ${photo.number} is wider than ${MAX_EDGE}px`);
     }
+    const nextWidth = row.length === 0 ? photo.width : rowWidth + GAP + photo.width;
+    if (row.length && nextWidth + PAD * 2 > MAX_EDGE) {
+      rows.push(row);
+      row = [photo];
+      rowWidth = photo.width;
+    } else {
+      row.push(photo);
+      rowWidth = nextWidth;
+    }
+  });
+  if (row.length) rows.push(row);
+
+  const sheetWidth = Math.max(...rows.map((items) => {
+    const content = items.reduce((sum, photo, index) => {
+      return sum + photo.width + (index ? GAP : 0);
+    }, 0);
+    return content + PAD * 2;
+  }));
+  const sheetHeight = rows.length * HEIGHT + Math.max(0, rows.length - 1) * GAP + PAD * 2;
+  if (sheetWidth > MAX_EDGE || sheetHeight > MAX_EDGE) {
+    throw new Error(`Sprite ${sheetWidth}x${sheetHeight} exceeds ${MAX_EDGE}px`);
+  }
+
+  const placed = [];
+  rows.forEach((items, rowIndex) => {
+    let x = PAD;
+    const y = PAD + rowIndex * (HEIGHT + GAP);
+    items.forEach((photo) => {
+      placed.push({ ...photo, x, y });
+      x += photo.width + GAP;
+    });
+  });
+  return { placed, sheetWidth, sheetHeight };
+}
+
+function removeLegacyDir() {
+  fs.rmSync(legacyDir, { recursive: true, force: true });
+}
+
+async function buildSprite(numbers) {
+  const sigma = HEIGHT * BLUR_RATIO;
+  const processed = [];
+  for (const number of numbers) {
     const aspect = aspectByNumber.get(number);
     if (!(aspect > 0)) {
       throw new Error(`No aspect in photo-manifest.json for photo ${number}`);
     }
-    listed.push({ number, aspect });
+    const smallPath = path.join(smallDir, `small-photo-${number}.jpg`);
+    const buffer = await sharp(smallPath)
+      .rotate()
+      .resize({ height: HEIGHT })
+      .modulate({ saturation: SATURATION })
+      .blur(sigma)
+      .png()
+      .toBuffer();
+    const meta = await sharp(buffer).metadata();
+    const padded = await sharp(buffer)
+      .extend({
+        top: PAD,
+        bottom: PAD,
+        left: PAD,
+        right: PAD,
+        extendWith: 'copy',
+      })
+      .png()
+      .toBuffer();
+    processed.push({
+      number,
+      aspect,
+      width: meta.width,
+      height: meta.height,
+      padded,
+    });
   }
 
+  const { placed, sheetWidth, sheetHeight } = pack(processed);
+  fs.mkdirSync(path.dirname(spritePath), { recursive: true });
+  const tempPath = `${spritePath}.tmp`;
+  await sharp({
+    create: {
+      width: sheetWidth,
+      height: sheetHeight,
+      channels: 3,
+      background: { r: 0, g: 0, b: 0 },
+    },
+  })
+    .composite(placed.map((photo) => ({
+      input: photo.padded,
+      left: photo.x - PAD,
+      top: photo.y - PAD,
+    })))
+    .jpeg({ quality: JPEG_QUALITY })
+    .toFile(tempPath);
+  fs.renameSync(tempPath, spritePath);
+
+  const photos = placed.map((photo) => ({
+    number: photo.number,
+    aspect: photo.aspect,
+    x: photo.x,
+    y: photo.y,
+    width: photo.width,
+    height: photo.height,
+  }));
   fs.writeFileSync(jsonPath, `${JSON.stringify({
     height: HEIGHT,
     blurRatio: BLUR_RATIO,
     saturation: SATURATION,
     jpegQuality: JPEG_QUALITY,
-    photos: listed,
+    gap: GAP,
+    maxEdge: MAX_EDGE,
+    spriteWidth: sheetWidth,
+    spriteHeight: sheetHeight,
+    photos,
   }, null, 2)}\n`);
-  const bytes = listed.reduce((sum, entry) => {
-    return sum + fs.statSync(path.join(outDir, `backdrop-photo-${entry.number}.jpg`)).size;
-  }, 0);
+  return { count: photos.length, sheetWidth, sheetHeight };
+}
+
+async function main() {
+  const numbers = listNumbers();
+  const saved = savedSettings();
+  let result;
+  if (isFresh(saved, numbers)) {
+    result = {
+      count: saved.photos.length,
+      sheetWidth: saved.spriteWidth,
+      sheetHeight: saved.spriteHeight,
+      reused: true,
+    };
+  } else {
+    result = await buildSprite(numbers);
+    result.reused = false;
+  }
+  removeLegacyDir();
+  const bytes = fs.statSync(spritePath).size;
   console.log(
-    `backdrop photos: ${wrote} written, ${reused} reused, ${listed.length} listed, ${(bytes / 1024).toFixed(1)} KB`
+    `backdrop sprite: ${result.reused ? 'reused' : 'written'}, ${result.count} photos, `
+    + `${result.sheetWidth}x${result.sheetHeight}, ${(bytes / 1024).toFixed(1)} KB`
   );
 }
 

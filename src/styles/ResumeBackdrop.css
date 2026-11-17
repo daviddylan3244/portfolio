@@ -35,11 +35,11 @@
   height: 100%;
 }
 
-.resume-backdrop-strip img {
+.resume-backdrop-tile {
   position: absolute;
-  display: block;
+  background-image: var(--backdrop-sprite);
+  background-repeat: no-repeat;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
-  -webkit-user-drag: none;
 }
