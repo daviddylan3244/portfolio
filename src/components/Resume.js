@@ -2,6 +2,7 @@ import React, { useLayoutEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/Header.css';
 import '../styles/Portfolio.css';
+import ResumeBackdrop from './ResumeBackdrop';
 
 const HEADSHOT_SRC = encodeURI('/photos/Website digital/Resume/Headshop-1.jpg');
 
@@ -20,6 +21,7 @@ function Resume() {
 
   return (
     <div className="bg-level-3" style={{ minHeight: '100vh', color: 'white' }}>
+      <ResumeBackdrop />
       <div className="header-container">
         <div className="header-nav">
           <button

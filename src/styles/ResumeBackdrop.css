@@ -1,0 +1,45 @@
+.resume-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100lvh;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+  opacity: 1;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.bg-level-3:has(.resume-backdrop) > .header-container,
+.bg-level-3:has(.resume-backdrop) > .resume-container {
+  position: relative;
+  z-index: 1;
+}
+
+.resume-backdrop-row {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.resume-backdrop-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+}
+
+.resume-backdrop-strip img {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}

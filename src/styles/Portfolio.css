@@ -157,7 +157,7 @@ li {
 
 .resume-role,
 .resume-card {
-  background: rgba(255, 255, 255, 0.06);
+  background: #111111;
   border-radius: 10px;
   padding: 24px;
   margin-bottom: 32px;
