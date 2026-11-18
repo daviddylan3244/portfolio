@@ -708,6 +708,13 @@ function Clothing() {
             (sum, band) => (band.row < index ? sum + band.height + rowGapPx : sum),
             0
         );
+        // Desktop search: open photo bands, in the order they were opened.
+        // Closing ones stay listed until their photo has flown home.
+        const searchBands = [];
+        const searchRowShift = (index) => searchBands.reduce(
+            (sum, band) => (!band.closing && band.row < index ? sum + band.height + rowGapPx : sum),
+            0
+        );
 
         const overlay = document.createElement('div');
         overlay.className = 'stream-overlay';
@@ -960,9 +967,23 @@ function Clothing() {
             } else if (headerPinned) {
                 belowChrome = 24;
             }
-            const margin = headerPinned
-                ? Math.round(chromeBottom + belowChrome)
-                : Math.round(chromeBottom + belowChrome - (headerBox.bottom - pan));
+            let margin;
+            if (headerPinned) {
+                margin = Math.round(chromeBottom + belowChrome);
+            } else {
+                // Measured against the header itself so scroll position and
+                // scroll lock (header above the viewport) don't change it.
+                let chromeBelowHeader = headerBox.top - headerBox.bottom;
+                [logo, menuEl, searchForm, searchStatus && !searchStatus.hidden ? searchStatus : null]
+                    .forEach((el) => {
+                        if (!el) return;
+                        chromeBelowHeader = Math.max(
+                            chromeBelowHeader,
+                            el.getBoundingClientRect().bottom - headerBox.bottom
+                        );
+                    });
+                margin = Math.round(chromeBelowHeader + belowChrome);
+            }
             const marginStr = margin ? `${margin}px` : '';
             if (searchActive) {
                 section.style.marginTop = '0px';
@@ -1080,7 +1101,13 @@ function Clothing() {
             if (scrollLockY != null) return;
             // Measure before hiding overflow: once the scrollbar is gone the
             // layout viewport gets wider and a centered header would jump.
-            const gutter = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+            // A reserved gutter (scrollbar-gutter: stable) keeps its width.
+            const reserved = String(
+                getComputedStyle(document.documentElement).scrollbarGutter || ''
+            ).startsWith('stable');
+            const gutter = reserved
+                ? 0
+                : Math.max(0, window.innerWidth - document.documentElement.clientWidth);
             scrollLockY = window.scrollY || window.pageYOffset || 0;
             scrollLockPad = document.body.style.paddingRight;
             document.body.style.position = 'fixed';
@@ -1507,7 +1534,8 @@ function Clothing() {
         // in the row at opacity 0 until the copy lands, or until the slot
         // recycles onto a different photo.
         const sourceBandHidden = (slot) => {
-            if (!slot || slot.search || !slot.spec) return false;
+            if (slot?.search) return searchBands.some((band) => band.slot === slot);
+            if (!slot || !slot.spec) return false;
             const key = photoKey(slot.spec);
             if (!key) return false;
             const match = (band) => band.slot === slot && band.key === key;
@@ -1941,6 +1969,7 @@ function Clothing() {
             if (viewer?.spec?.srcFull === key) return true;
             if (viewer?.departures?.some((dep) => dep.spec?.srcFull === key)) return true;
             if (galleryBands.some((band) => band.largeOn && band.spec?.srcFull === key)) return true;
+            if (searchBands.some((band) => band.spec?.srcFull === key)) return true;
             const loaded = largeDecoded.get(key);
             const src = loaded?.img?.src;
             if (!src) return false;
@@ -1977,6 +2006,7 @@ function Clothing() {
                 if (galleryBands.some((band) => (
                     band.spec?.srcFull === key && (band.largeOn || band.largeLoading)
                 ))) return;
+                if (searchBands.some((band) => band.spec?.srcFull === key)) return;
                 load.controller.abort();
                 largeInflight.delete(key);
             });
@@ -3183,6 +3213,7 @@ function Clothing() {
                 searchBoard.classList.remove('is-viewer-open');
                 applyRows(0);
                 unlockScroll();
+                if (searchActive && searchLayoutStale) relayoutSearchBoard();
                 syncPlayback();
                 releaseLayoutWrites(1600);
                 endRowSyncProbe();
@@ -3639,6 +3670,10 @@ function Clothing() {
                 lastMobileToggle = { slot, at: now };
                 if (slot.search) toggleMobileSearchCopy(slot);
                 else toggleGalleryBand(slot);
+                return;
+            }
+            if (slot.search) {
+                toggleSearchBand(slot);
                 return;
             }
             if (!viewer) {
@@ -4409,11 +4444,21 @@ function Clothing() {
                     && !viewer.handedOff
                     && (!rowStaysVisible(slot.row) || (slot === viewer.slot && !viewer.tileGone))
                 ) continue;
-                const scale = slot.scale || 1;
-                const width = slot.width * scale;
-                const height = itemHeight * scale;
-                const left = viewOriginX + slot.x + (slot.width - width) / 2;
-                const top = rowTopInView(slot.row) + (itemHeight - height) / 2;
+                let width;
+                let height;
+                let left;
+                let top;
+                if (slot.search) {
+                    // Rows slide while search bands open and close.
+                    const box = slot.el.getBoundingClientRect();
+                    ({ width, height, left, top } = box);
+                } else {
+                    const scale = slot.scale || 1;
+                    width = slot.width * scale;
+                    height = itemHeight * scale;
+                    left = viewOriginX + slot.x + (slot.width - width) / 2;
+                    top = rowTopInView(slot.row) + (itemHeight - height) / 2;
+                }
                 if (
                     pointerX >= left
                     && pointerX < left + width
@@ -4617,7 +4662,7 @@ function Clothing() {
                 advanceViewer(now, dt);
                 sampleCloseProbe(now);
                 if (!holdGalleryDrift && !gallerySearchFading) sampleRowSyncProbe(now);
-                if (fineHover && (!closing || viewer.handedOff)) syncHover();
+                if (fineHover && (!closing || viewer.handedOff) && !searchBandScroll) syncHover();
                 if (!closing && !holdGalleryDrift && !gallerySearchFading && process.env.NODE_ENV !== 'production') {
                     warnEmptyVisibleTiles();
                     warnOnScreenDuplicates();
@@ -4771,6 +4816,8 @@ function Clothing() {
                 slot.copyEl = null;
                 slot.searchOpen = false;
             });
+            searchBands.slice().forEach(dropSearchBand);
+            searchBoard.classList.remove('is-band-slide');
             searchPool.length = 0;
             searchRows.length = 0;
             searchBoard.replaceChildren();
@@ -4912,14 +4959,14 @@ function Clothing() {
 
         const mobileSearchLayout = () => window.innerWidth < MOBILE_BREAKPOINT_PX;
 
-        const searchOutgoingSelector = '.stream-item, .stream-search-empty, .stream-search-copy';
+        const searchOutgoingSelector = '.stream-item, .stream-search-empty, .stream-search-copy, .stream-search-band';
 
         const ensureSearchRow = (index) => {
             if (searchRows[index]) return searchRows[index];
             const rowEl = document.createElement('div');
             rowEl.className = 'floating-streams-row';
             rowEl.dataset.rowIndex = String(index);
-            rowEl.style.top = `${index * stridePx()}px`;
+            rowEl.style.top = `${index * stridePx() + searchRowShift(index)}px`;
             rowEl.style.height = `${itemHeight}px`;
             searchBoard.append(rowEl);
             searchRows[index] = rowEl;
@@ -4932,7 +4979,8 @@ function Clothing() {
                 return;
             }
             const count = Math.max(1, rowCount);
-            const boardHeight = (count - 1) * stridePx() + itemHeight + labelClearancePx(itemHeight);
+            const boardHeight = (count - 1) * stridePx() + itemHeight + labelClearancePx(itemHeight)
+                + searchRowShift(count);
             searchBoard.style.height = `${Math.max(boardHeight, itemHeight)}px`;
         };
 
@@ -5746,6 +5794,7 @@ function Clothing() {
                 scale: 1,
                 frozen: false,
                 search: true,
+                hit: pos.hit,
                 spec,
             };
             bindItem(slot);
@@ -5783,11 +5832,22 @@ function Clothing() {
             searchBoard.style.pointerEvents = '';
         };
 
+        const SEARCH_RELAYOUT_MIN_WIDTH_PX = 20;
+        const currentSearchSize = () => ({ width: window.innerWidth, height: viewHeight() });
+        let searchLayoutSize = currentSearchSize();
+        let searchLayoutStale = false;
+        const searchSizeChanged = () => (
+            Math.abs(window.innerWidth - searchLayoutSize.width) > SEARCH_RELAYOUT_MIN_WIDTH_PX
+            || Math.abs(viewHeight() - searchLayoutSize.height) >= 1
+        );
+
         const buildSearchLayout = (hits) => {
             destroySearchBoard();
             revealSearchBoard();
             applyLayoutMetrics();
             cacheStreamOrigin();
+            searchLayoutSize = currentSearchSize();
+            searchLayoutStale = false;
             if (!hits.length) {
                 const emptyEl = showSearchEmpty();
                 syncSearchBoardHeight(0, true);
@@ -5810,6 +5870,683 @@ function Clothing() {
                 syncSearchBoardHeight(usedRows, false);
             }
             return searchPool.map((slot) => slot.el);
+        };
+
+        // Re-packs the existing result tiles for the current size. The
+        // elements, their listeners and hover state are kept.
+        const relayoutSearchBoard = () => {
+            applyLayoutMetrics();
+            cacheStreamOrigin();
+            searchLayoutSize = currentSearchSize();
+            searchLayoutStale = false;
+            if (!searchPool.length) {
+                if (searchBoard.classList.contains('is-empty')) syncSearchBoardHeight(0, true);
+                return;
+            }
+            const stacked = mobileSearchLayout();
+            searchBoard.classList.toggle('is-stacked', stacked);
+            const hits = searchPool.map((slot) => slot.hit);
+            const positions = stacked ? measureMobileSearchHits(hits) : measureSearchHits(hits);
+            positions.forEach((pos, index) => {
+                const slot = searchPool[index];
+                const rowEl = ensureSearchRow(pos.row);
+                if (slot.el.parentNode !== rowEl) rowEl.append(slot.el);
+                if (slot.copyEl && slot.copyEl.parentNode !== rowEl) rowEl.append(slot.copyEl);
+                slot.row = pos.row;
+                slot.x = pos.x;
+                slot.width = pos.width;
+                slot.aspectRatio = pos.aspect;
+                slot.photoH = pos.photoH || itemHeight;
+                slot.searchBorder = pos.border || 0;
+                slot.el.style.width = `${pos.width}px`;
+                slot.el.style.height = `${slot.photoH}px`;
+                slot.el.style.top = slot.searchBorder ? `${slot.searchBorder}px` : '';
+                slot.el.style.boxShadow = slot.searchBorder
+                    ? `0 0 0 ${slot.searchBorder}px #fff`
+                    : '';
+                slot.el.setAttribute('aria-label', slot.searchBorder ? 'Show details' : 'Open image');
+                paint(slot);
+            });
+            const usedRows = positions.reduce((max, pos) => Math.max(max, pos.row + 1), 0);
+            searchRows.splice(usedRows).forEach((rowEl) => {
+                if (rowEl) rowEl.remove();
+            });
+            if (stacked) {
+                dismissSearchBands();
+                layoutMobileSearch();
+            } else {
+                searchRows.forEach((rowEl) => {
+                    rowEl.style.height = `${itemHeight}px`;
+                });
+                clearSearchFlips();
+                refitSearchBands();
+                layoutSearchRows();
+                syncSearchBoardHeight(usedRows, false);
+            }
+            cacheStreamOrigin();
+            if (hoverSlot && hoverSlot.search) {
+                hoverSlot.el.style.setProperty('--stream-outline', `${outlineFor(hoverSlot)}px`);
+                syncLabel(hoverSlot);
+            }
+            if (fineHover) syncHover();
+        };
+
+        // Desktop search: a clicked result opens in a band under its row,
+        // photo on the right and its text beside it, and the rows below slide
+        // down to make room. Several can be open at once.
+        const searchRowTopPx = (index) => index * stridePx() + searchRowShift(index);
+
+        const placeSearchBands = () => {
+            const nextTop = new Map();
+            searchBands.forEach((band) => {
+                if (band.closing) return;
+                const top = nextTop.has(band.row)
+                    ? nextTop.get(band.row)
+                    : searchRowTopPx(band.row) + stridePx();
+                band.top = Math.round(top);
+                band.el.style.top = `${band.top}px`;
+                nextTop.set(band.row, top + band.height + rowGapPx);
+            });
+        };
+
+        const layoutSearchRows = () => {
+            searchRows.forEach((rowEl, index) => {
+                if (rowEl) rowEl.style.top = `${searchRowTopPx(index)}px`;
+            });
+            placeSearchBands();
+        };
+
+        const setSearchBandSlide = (ms, ease) => {
+            if (reducedMotion) return;
+            searchBoard.style.setProperty('--band-slide-ms', `${ms}ms`);
+            searchBoard.style.setProperty('--band-slide-ease', ease);
+            searchBoard.classList.add('is-band-slide');
+        };
+
+        const searchBandGeometry = (slot) => {
+            const spec = slot.spec;
+            const aspect = slot.aspectRatio || viewerAspect(spec, slot);
+            const hasDesc = photoHasDescription(spec);
+            const boardW = searchBoardWidth();
+            const panelW = panelWidthPx();
+            const sideCost = hasDesc ? panelW + GALLERY_PANEL_GAP_PX : 0;
+            const desk = desktopViewerPhotoSize(aspect, hasDesc);
+            const chromeH = Math.max(0, chromeBottomPx() + pageScroll());
+            const maxTotalW = Math.max(80, boardW - VIEWER_GAP_PX * 2 - sideCost);
+            const maxTotalH = Math.max(80, viewHeight() - chromeH - VIEWER_GAP_PX);
+            const fit = (border) => fitInBox(
+                aspect,
+                Math.max(40, Math.min(desk.width, maxTotalW - border * 2)),
+                Math.max(40, Math.min(desk.width / aspect, maxTotalH - border * 2))
+            );
+            let border = desk.border;
+            let inner = fit(border);
+            if (inner.width < desk.width - 0.5) {
+                border = frameBorderForWidth(inner.width, aspect, hasDesc) || border;
+                inner = fit(border);
+            }
+            const photoW = Math.max(1, Math.round(inner.width));
+            const photoH = Math.max(1, Math.round(photoW / aspect));
+            const totalW = photoW + border * 2;
+            const totalH = photoH + border * 2;
+            let frameLeft;
+            let panelBox;
+            if (hasDesc) {
+                const groupLeft = Math.max(
+                    VIEWER_GAP_PX,
+                    Math.round((boardW - (totalW + sideCost)) / 2)
+                );
+                frameLeft = groupLeft + sideCost;
+                panelBox = { compact: false, left: groupLeft, width: panelW };
+            } else {
+                frameLeft = Math.round((boardW - totalW) / 2);
+                const maxWidth = Math.max(80, frameLeft - GALLERY_PANEL_GAP_PX - 8);
+                panelBox = {
+                    compact: true,
+                    maxWidth,
+                    left: Math.max(8, frameLeft - GALLERY_PANEL_GAP_PX - maxWidth),
+                    width: maxWidth,
+                };
+            }
+            // Move the group left so the × fits beside the frame, if there is room.
+            const closeShortfall = frameLeft + totalW + CLOSE_BUTTON_GAP_PX + CLOSE_BUTTON_PX + 8 - boardW;
+            if (closeShortfall > 0) {
+                const groupLeft = hasDesc ? panelBox.left : frameLeft;
+                const shift = Math.max(0, Math.min(closeShortfall, groupLeft - 8));
+                frameLeft -= shift;
+                if (hasDesc) panelBox.left -= shift;
+                else panelBox.maxWidth = Math.max(80, frameLeft - GALLERY_PANEL_GAP_PX - 8);
+            }
+            return { boardW, border, photoW, photoH, totalW, totalH, frameLeft, panel: panelBox };
+        };
+
+        const buildSearchBandPanel = (spec) => {
+            const info = photoLabelFor(spec);
+            if (!info) return null;
+            const el = document.createElement('div');
+            el.className = 'stream-panel stream-band-panel';
+            el.style.setProperty('--panel-out-ms', `${GALLERY_TEXT_OUT_MS}ms`);
+            const inner = document.createElement('div');
+            inner.className = 'stream-panel-inner';
+            const copy = document.createElement('div');
+            copy.className = 'stream-panel-copy';
+            const title = document.createElement('i');
+            title.className = 'stream-panel-title';
+            const year = document.createElement('div');
+            year.className = 'stream-panel-year';
+            const details = document.createElement('div');
+            details.className = 'stream-panel-details';
+            const rule = document.createElement('div');
+            rule.className = 'stream-panel-rule';
+            const text = document.createElement('p');
+            text.className = 'stream-panel-text';
+            const links = document.createElement('div');
+            links.className = 'stream-panel-links';
+            copy.append(title, year, details);
+            inner.append(copy, rule, text, links);
+            el.append(inner);
+            const detailText = String(info.details || '').trim();
+            const description = String(info.description || '').trim();
+            setMarkedText(title, info.title || '');
+            year.textContent = info.year || '';
+            year.hidden = !info.year;
+            setMarkedText(details, detailText);
+            details.hidden = !detailText;
+            setDescriptionText(text, description);
+            text.hidden = !description;
+            rule.hidden = !description;
+            (Array.isArray(info.links) ? info.links : []).forEach((link) => {
+                if (!link || !link.url || !link.text) return;
+                const anchor = document.createElement('a');
+                anchor.className = 'stream-panel-link';
+                anchor.href = link.url;
+                anchor.target = '_blank';
+                anchor.rel = 'noopener noreferrer';
+                anchor.textContent = link.text;
+                anchor.tabIndex = -1;
+                anchor.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                });
+                links.append(anchor);
+            });
+            links.hidden = !links.childNodes.length;
+            const fields = () => [title, year, details, text, ...links.querySelectorAll('a')];
+            return { el, inner, copy, title, year, details, rule, fields };
+        };
+
+        const markBandLinksReady = (panelParts) => {
+            panelParts.el.querySelectorAll('a').forEach((anchor) => {
+                anchor.style.visibility = '';
+                anchor.classList.add('is-ready');
+                anchor.dataset.revealReady = '1';
+                anchor.removeAttribute('tabindex');
+            });
+        };
+
+        const clearSearchBandReveal = (band) => {
+            if (!band.reveal || !band.panel) return;
+            band.reveal.clear({
+                container: band.panel.el,
+                textEls: band.panel.fields(),
+                ruleEl: band.panel.rule,
+                innerEl: band.panel.inner,
+            });
+            band.reveal = null;
+        };
+
+        const startSearchBandReveal = (band) => {
+            const parts = band.panel;
+            if (!parts) return;
+            clearSearchBandReveal(band);
+            band.reveal = createTextReveal({
+                sweepMs: GALLERY_SWEEP_MS,
+                charMinMs: GALLERY_CHAR_MIN_MS,
+                charExtraMs: GALLERY_CHAR_EXTRA_MS,
+            });
+            const started = band.reveal.start({
+                container: parts.el,
+                textEls: parts.fields().filter((el) => el && !el.hidden && el.textContent),
+                ruleEl: parts.rule.hidden ? null : parts.rule,
+                innerEl: parts.inner,
+                reducedMotion,
+                sweepWidth: panelWidthPx(),
+            });
+            if (!started || reducedMotion) markBandLinksReady(parts);
+        };
+
+        // Photo and panel inside the band, which sits at board x = 0.
+        const applySearchBandGeometry = (band) => {
+            const geo = band.geo;
+            band.height = geo.totalH;
+            band.el.style.height = `${geo.totalH}px`;
+            const photo = band.photoEl;
+            photo.style.left = `${geo.frameLeft + geo.border}px`;
+            photo.style.top = `${geo.border}px`;
+            photo.style.width = `${geo.photoW}px`;
+            photo.style.height = `${geo.photoH}px`;
+            const parts = band.panel;
+            if (parts) {
+                const box = geo.panel;
+                const panelEl = parts.el;
+                panelEl.classList.toggle('is-compact', !!box.compact);
+                panelEl.style.top = '0px';
+                panelEl.style.height = `${geo.totalH}px`;
+                let { left, width } = box;
+                if (box.compact) {
+                    panelEl.style.paddingRight = '0px';
+                    panelEl.style.width = `${Math.round(box.maxWidth)}px`;
+                    const copyW = Math.ceil(Math.max(
+                        parts.copy.getBoundingClientRect().width,
+                        parts.title.getBoundingClientRect().width,
+                        parts.year.hidden ? 0 : parts.year.getBoundingClientRect().width,
+                        parts.details.hidden ? 0 : parts.details.getBoundingClientRect().width
+                    ));
+                    width = Math.min(box.maxWidth, Math.max(copyW, 1));
+                    left = Math.max(8, Math.round(geo.frameLeft - GALLERY_PANEL_GAP_PX - width));
+                }
+                panelEl.style.paddingRight = `${PANEL_INK_PAD_PX}px`;
+                panelEl.style.width = `${Math.round(width) + PANEL_INK_PAD_PX}px`;
+                panelEl.style.left = `${Math.round(left)}px`;
+            }
+            const right = geo.frameLeft + geo.totalW;
+            let closeX = right + CLOSE_BUTTON_GAP_PX;
+            let closeY = 0;
+            if (closeX + CLOSE_BUTTON_PX > geo.boardW - 8) {
+                closeX = right - geo.border - CLOSE_BUTTON_PX - 6;
+                closeY = geo.border + 6;
+            }
+            band.closeEl.style.left = `${Math.round(closeX)}px`;
+            band.closeEl.style.top = `${Math.round(closeY)}px`;
+        };
+
+        // Transform that puts the band photo over its tile in the row.
+        const searchBandTilePose = (band, extraY = 0) => {
+            const { slot, geo } = band;
+            const dx = slot.x - (geo.frameLeft + geo.border);
+            const dy = searchRowTopPx(slot.row) - (band.top + geo.border) + extraY;
+            const scale = geo.photoW > 0 ? slot.width / geo.photoW : 1;
+            return `translate(${Math.round(dx)}px, ${Math.round(dy)}px) scale(${scale})`;
+        };
+
+        const SEARCH_OPEN_EASE = [0.4, 0, 0.2, 1];
+        const SEARCH_OPEN_EASE_CSS = 'cubic-bezier(0.4, 0, 0.2, 1)';
+        const searchOpenMs = (distance) => Math.min(
+            810,
+            Math.max(450, 405 + 0.36 * Math.abs(distance))
+        );
+        const roundDevicePx = (value) => {
+            const dpr = window.devicePixelRatio || 1;
+            return Math.round(value * dpr) / dpr;
+        };
+
+        let searchBandScroll = null;
+        const cancelSearchBandScroll = () => {
+            if (!searchBandScroll) return;
+            if (searchBandScroll.raf) cancelAnimationFrame(searchBandScroll.raf);
+            searchBandScroll = null;
+        };
+        const finishSearchBandScroll = () => {
+            searchBandScroll = null;
+            cacheStreamOrigin();
+            if (fineHover) syncHover();
+        };
+
+        // Open slides on the compositor. Closing still transitions `top`.
+        const searchFlipTimers = new WeakMap();
+        const translateYOf = (el) => {
+            const transform = getComputedStyle(el).transform;
+            if (!transform || transform === 'none') return 0;
+            return new DOMMatrix(transform).m42 || 0;
+        };
+        const clearSearchFlip = (el) => {
+            if (!el) return;
+            const timer = searchFlipTimers.get(el);
+            if (timer) {
+                window.clearTimeout(timer);
+                searchFlipTimers.delete(el);
+            }
+            if (!el.dataset.flip) return;
+            delete el.dataset.flip;
+            el.style.transition = '';
+            el.style.transform = '';
+        };
+        const clearSearchFlips = () => {
+            searchRows.forEach(clearSearchFlip);
+            searchBands.forEach((band) => clearSearchFlip(band.el));
+        };
+        const visualSearchTop = (el) => {
+            if (!el) return null;
+            const top = parseFloat(el.style.top);
+            if (!Number.isFinite(top)) return null;
+            return el.dataset.flip ? top + translateYOf(el) : top;
+        };
+        const armSearchFlip = (befores) => {
+            if (reducedMotion) return [];
+            const pending = [];
+            befores.forEach(({ el, before }) => {
+                if (!el || before == null) return;
+                const after = parseFloat(el.style.top);
+                if (!Number.isFinite(after) || Math.abs(before - after) < 0.5) {
+                    if (el.dataset.flip) clearSearchFlip(el);
+                    return;
+                }
+                const timer = searchFlipTimers.get(el);
+                if (timer) window.clearTimeout(timer);
+                el.dataset.flip = '1';
+                el.style.transition = 'none';
+                el.style.transform = `translateY(${before - after}px)`;
+                pending.push(el);
+            });
+            return pending;
+        };
+        const runSearchFlip = (pending, ms) => {
+            if (!pending.length) return;
+            pending.forEach((el) => {
+                el.style.transition = `transform ${ms}ms ${SEARCH_OPEN_EASE_CSS}`;
+                el.style.transform = 'translateY(0)';
+                searchFlipTimers.set(el, window.setTimeout(() => clearSearchFlip(el), ms + 50));
+            });
+        };
+
+        // Center the band's white frame. The target and the clamps are the
+        // same at every scroll position. A new open keeps the current
+        // position and speed instead of starting the ease over.
+        const scrollSearchBandIntoView = (band) => {
+            cacheStreamOrigin();
+            const frameCenter = viewOriginY + band.top + band.height / 2;
+            const startY = pageScroll();
+            const targetY = Math.max(
+                0,
+                Math.min(scrollLimit(), startY + frameCenter - viewHeight() / 2)
+            );
+            const distance = targetY - startY;
+            const ms = searchOpenMs(distance);
+            if (reducedMotion || Math.abs(distance) <= 1) {
+                if (searchBandScroll) cancelSearchBandScroll();
+                window.scrollTo(0, roundDevicePx(targetY));
+                finishSearchBandScroll();
+                return ms;
+            }
+            const now = performance.now();
+            if (searchBandScroll) {
+                const state = searchBandScroll;
+                state.startY = roundDevicePx(startY);
+                state.targetY = roundDevicePx(targetY);
+                state.v0 = state.velocity || 0;
+                state.t0 = now;
+                state.duration = ms;
+                state.lastY = state.startY;
+                state.lastT = now;
+                return ms;
+            }
+            const state = {
+                raf: 0,
+                startY: roundDevicePx(startY),
+                targetY: roundDevicePx(targetY),
+                v0: 0,
+                velocity: 0,
+                t0: now,
+                duration: ms,
+                lastY: roundDevicePx(startY),
+                lastT: now,
+            };
+            const step = (frameNow) => {
+                if (searchBandScroll !== state) return;
+                const raw = Math.min(1, (frameNow - state.t0) / state.duration);
+                const delta = state.targetY - state.startY;
+                let y;
+                if (Math.abs(state.v0) > 0.02 && delta !== 0) {
+                    let slope = state.v0 * state.duration;
+                    if (delta > 0) slope = Math.min(Math.max(0, slope), delta * 3);
+                    else slope = Math.max(Math.min(0, slope), delta * 3);
+                    const u = raw;
+                    const u2 = u * u;
+                    const u3 = u2 * u;
+                    y = (2 * u3 - 3 * u2 + 1) * state.startY
+                        + (u3 - 2 * u2 + u) * slope
+                        + (-2 * u3 + 3 * u2) * state.targetY;
+                    y = Math.min(Math.max(y, Math.min(state.startY, state.targetY)), Math.max(state.startY, state.targetY));
+                } else {
+                    y = state.startY + delta * easeBezier(SEARCH_OPEN_EASE, raw);
+                }
+                y = roundDevicePx(y);
+                window.scrollTo(0, y);
+                const dt = frameNow - state.lastT;
+                if (dt > 0) state.velocity = (y - state.lastY) / dt;
+                state.lastY = y;
+                state.lastT = frameNow;
+                if (raw < 1) state.raf = requestAnimationFrame(step);
+                else finishSearchBandScroll();
+            };
+            searchBandScroll = state;
+            state.raf = requestAnimationFrame(step);
+            return ms;
+        };
+
+        const loadSearchBandLarge = (band) => {
+            if (!band.spec?.srcFull) return;
+            loadLarge(band.spec, { priority: 'high', reason: 'open' }).then((image) => {
+                if (!image || band.closing || !searchBands.includes(band)) return;
+                band.largeEl.src = image.src;
+                band.largeEl.style.opacity = '1';
+            });
+        };
+
+        const clearSearchBandTimers = (band) => {
+            band.timers.forEach((id) => window.clearTimeout(id));
+            band.timers = [];
+        };
+
+        const dropSearchBand = (band) => {
+            clearSearchBandTimers(band);
+            clearSearchBandReveal(band);
+            if (band.el.parentNode) band.el.remove();
+            const index = searchBands.indexOf(band);
+            if (index >= 0) searchBands.splice(index, 1);
+            const slot = band.slot;
+            if (slot?.el) {
+                slot.el.setAttribute('aria-expanded', 'false');
+                if (!searchBands.some((other) => other.slot === slot)) {
+                    slot.paintedOpacity = 1;
+                    slot.el.style.opacity = '1';
+                }
+            }
+        };
+
+        const finishSearchBandSlide = () => {
+            if (searchBands.length) return;
+            searchBoard.classList.remove('is-band-slide');
+        };
+
+        const dismissSearchBands = () => {
+            if (!searchBands.length) return;
+            clearSearchFlips();
+            searchBands.slice().forEach(dropSearchBand);
+            searchBoard.classList.remove('is-band-slide');
+            layoutSearchRows();
+            if (searchRows.length) syncSearchBoardHeight(searchRows.length, false);
+        };
+
+        const closeSearchBand = (band) => {
+            if (!band || band.closing) return;
+            clearSearchBandTimers(band);
+            band.closing = true;
+            band.slot.el.setAttribute('aria-expanded', 'false');
+            band.closeEl.classList.remove('is-visible');
+            const parts = band.panel;
+            const fadeText = !!parts && !reducedMotion;
+            if (parts) {
+                parts.el.style.transition = fadeText ? '' : 'none';
+                parts.el.classList.add('is-leaving');
+                parts.el.classList.remove('is-shown');
+            }
+            const fly = () => {
+                clearSearchBandReveal(band);
+                band.el.style.pointerEvents = 'none';
+                if (reducedMotion) {
+                    dropSearchBand(band);
+                    layoutSearchRows();
+                    syncSearchBoardHeight(searchRows.length, false);
+                    return;
+                }
+                const ms = transitionMs;
+                clearSearchFlips();
+                setSearchBandSlide(ms, CLOSE_EASING);
+                layoutSearchRows();
+                const photo = band.photoEl;
+                photo.style.transition = `transform ${ms}ms ${CLOSE_EASING}, box-shadow ${ms}ms ${CLOSE_EASING}`;
+                photo.style.transform = searchBandTilePose(band);
+                photo.style.boxShadow = `0 0 0 ${band.geo.border}px rgba(255,255,255,0)`;
+                band.timers.push(window.setTimeout(() => {
+                    dropSearchBand(band);
+                    syncSearchBoardHeight(searchRows.length, false);
+                    finishSearchBandSlide();
+                }, ms + 20));
+            };
+            if (fadeText) band.timers.push(window.setTimeout(fly, GALLERY_TEXT_OUT_MS));
+            else fly();
+        };
+
+        const openSearchBand = (slot) => {
+            const geo = searchBandGeometry(slot);
+            const bandEl = document.createElement('div');
+            bandEl.className = 'stream-search-band';
+            const photoEl = document.createElement('div');
+            photoEl.className = 'stream-mobile-photo stream-band-photo';
+            const small = document.createElement('img');
+            small.alt = '';
+            small.draggable = false;
+            const shown = slot.spec.img;
+            small.src = (shown && (shown.currentSrc || shown.src)) || slot.spec.src || '';
+            const large = document.createElement('img');
+            large.className = 'stream-mobile-large';
+            large.alt = '';
+            large.draggable = false;
+            large.style.transition = `opacity ${LARGE_CROSSFADE_MS}ms ease`;
+            photoEl.append(small, large);
+            const closeEl = document.createElement('button');
+            closeEl.type = 'button';
+            closeEl.className = 'stream-close stream-band-close';
+            closeEl.setAttribute('aria-label', 'Close');
+            closeEl.textContent = '×';
+            const panelParts = buildSearchBandPanel(slot.spec);
+            bandEl.append(photoEl, closeEl);
+            if (panelParts) bandEl.append(panelParts.el);
+            const band = {
+                slot,
+                spec: slot.spec,
+                row: slot.row,
+                el: bandEl,
+                photoEl,
+                largeEl: large,
+                closeEl,
+                panel: panelParts,
+                geo,
+                height: geo.totalH,
+                top: 0,
+                closing: false,
+                reveal: null,
+                timers: [],
+            };
+            searchBoard.append(bandEl);
+            applySearchBandGeometry(band);
+            searchBands.push(band);
+            if (hoverSlot === slot) {
+                slot.el.classList.remove('is-hovered');
+                hoverSlot = null;
+            }
+            slot.paintedOpacity = 0;
+            slot.el.style.opacity = '0';
+            slot.el.setAttribute('aria-expanded', 'true');
+            const befores = [];
+            searchRows.forEach((el) => {
+                if (el) befores.push({ el, before: visualSearchTop(el) });
+            });
+            searchBands.forEach((item) => {
+                if (!item.closing && item.el) befores.push({ el: item.el, before: visualSearchTop(item.el) });
+            });
+            searchBoard.classList.remove('is-band-slide');
+            layoutSearchRows();
+            syncSearchBoardHeight(searchRows.length, false);
+            photoEl.addEventListener('click', (event) => {
+                event.stopPropagation();
+                closeSearchBand(band);
+            });
+            closeEl.addEventListener('click', (event) => {
+                event.stopPropagation();
+                closeSearchBand(band);
+            });
+            const white = `0 0 0 ${geo.border}px #fff`;
+            const pendingFlip = armSearchFlip(befores);
+            let ms;
+            if (reducedMotion) {
+                photoEl.style.boxShadow = white;
+                ms = scrollSearchBandIntoView(band);
+            } else {
+                const rowEl = searchRows[slot.row];
+                const tileShift = rowEl && rowEl.dataset.flip ? translateYOf(rowEl) : 0;
+                photoEl.style.transformOrigin = '0 0';
+                photoEl.style.transition = 'none';
+                photoEl.style.transform = searchBandTilePose(band, tileShift);
+                photoEl.style.boxShadow = `0 0 0 ${geo.border}px rgba(255,255,255,0)`;
+                void searchBoard.offsetWidth;
+                ms = scrollSearchBandIntoView(band);
+                runSearchFlip(pendingFlip, ms);
+                photoEl.style.transition = `transform ${ms}ms ${SEARCH_OPEN_EASE_CSS}, box-shadow ${ms}ms ${SEARCH_OPEN_EASE_CSS}`;
+                photoEl.style.transform = 'none';
+                photoEl.style.boxShadow = white;
+            }
+            loadSearchBandLarge(band);
+            const showText = () => {
+                if (band.closing) return;
+                band.closeEl.classList.add('is-visible');
+                if (!band.panel) return;
+                band.panel.el.classList.remove('is-leaving');
+                band.panel.el.style.transition = 'none';
+                band.panel.el.classList.add('is-shown');
+                void band.panel.el.offsetWidth;
+                band.panel.el.style.transition = '';
+                startSearchBandReveal(band);
+            };
+            if (reducedMotion) showText();
+            else band.timers.push(window.setTimeout(showText, ms));
+        };
+
+        const toggleSearchBand = (slot) => {
+            if (!searchActive || !slot?.el || !slot.spec || mobileSearchLayout()) return;
+            const existing = searchBands.find((band) => band.slot === slot);
+            if (existing) {
+                if (!existing.closing) closeSearchBand(existing);
+                return;
+            }
+            openSearchBand(slot);
+        };
+
+        // After a resize the bands follow their tiles, which may have moved row.
+        const refitSearchBands = () => {
+            searchBands.slice().forEach((band) => {
+                if (band.closing) {
+                    dropSearchBand(band);
+                    return;
+                }
+                band.row = band.slot.row;
+                band.geo = searchBandGeometry(band.slot);
+                applySearchBandGeometry(band);
+                if (band.reveal) {
+                    clearSearchBandReveal(band);
+                    if (band.panel) markBandLinksReady(band.panel);
+                }
+            });
+        };
+
+        const closeLatestSearchBand = () => {
+            for (let i = searchBands.length - 1; i >= 0; i -= 1) {
+                if (!searchBands[i].closing) {
+                    closeSearchBand(searchBands[i]);
+                    return true;
+                }
+            }
+            return false;
         };
 
         const coverRowForSearchReturn = (rowIndex) => {
@@ -6093,6 +6830,23 @@ function Clothing() {
             closeViewer();
         });
         const onKeyDown = (event) => {
+            if (
+                searchBandScroll
+                && !event.defaultPrevented
+                && (
+                    event.key === 'ArrowDown'
+                    || event.key === 'ArrowUp'
+                    || event.key === 'ArrowLeft'
+                    || event.key === 'ArrowRight'
+                    || event.key === 'PageDown'
+                    || event.key === 'PageUp'
+                    || event.key === 'Home'
+                    || event.key === 'End'
+                    || event.key === ' '
+                )
+            ) {
+                cancelSearchBandScroll();
+            }
             if (mobileOpenScroll) cancelMobileOpenScroll();
             if (
                 mobileOpenScroll
@@ -6109,6 +6863,10 @@ function Clothing() {
             if (event.key === 'Escape') {
                 if (viewer) {
                     closeViewer();
+                    return;
+                }
+                if (searchActive && closeLatestSearchBand()) {
+                    event.preventDefault();
                     return;
                 }
                 if (searchActive || (searchInput && searchInput.value)) {
@@ -6218,6 +6976,7 @@ function Clothing() {
         let scrollFrame = 0;
         const onScroll = () => {
             if (searchActive) {
+                if (searchBandScroll) return;
                 cacheStreamOrigin();
                 if (fineHover) syncHover();
                 return;
@@ -6266,9 +7025,15 @@ function Clothing() {
             }
             cancelMobileOpenScroll();
         };
+        const interruptSearchBandScroll = () => {
+            if (searchBandScroll) cancelSearchBandScroll();
+        };
         window.addEventListener('wheel', interruptMobileOpenScroll, { passive: true });
         window.addEventListener('touchstart', interruptMobileOpenScroll, { passive: true });
         window.addEventListener('touchmove', interruptMobileOpenScroll, { passive: true });
+        window.addEventListener('wheel', interruptSearchBandScroll, { passive: true });
+        window.addEventListener('touchstart', interruptSearchBandScroll, { passive: true });
+        window.addEventListener('touchmove', interruptSearchBandScroll, { passive: true });
 
         let resizeFrame = 0;
         const onResize = () => {
@@ -6290,30 +7055,31 @@ function Clothing() {
                 resizeFrame = 0;
                 if (cancelled || pageIsZoomed()) return;
                 if (!searchActive && layoutWritesQuiet()) return;
-                if (viewer && viewer.phase === 'closing') return;
+                if (viewer && viewer.phase === 'closing') {
+                    if (searchActive && searchSizeChanged()) searchLayoutStale = true;
+                    return;
+                }
                 if (searchActive) {
+                    if (!searchSizeChanged()) return;
+                    if (!viewer) {
+                        relayoutSearchBoard();
+                        return;
+                    }
+                    searchLayoutStale = true;
                     applyLayoutMetrics();
                     cacheStreamOrigin();
-                    if (!viewer && searchQuery) {
-                        const incoming = buildSearchLayout(searchPhotos(searchIndex, searchQuery));
-                        incoming.forEach((el) => {
-                            el.style.transition = 'none';
-                            el.style.opacity = '1';
-                        });
-                    } else if (viewer) {
-                        clipOverlayToHeader();
-                        viewer.layout = layoutViewer(viewer.spec, viewer.slot);
-                        viewer.hiddenRows = hiddenRowsFor(viewer.layout);
-                        viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
-                        const resized = openTargetFor(viewer.layout);
-                        viewer.openTo = resized.pose;
-                        if (viewer.phase !== 'sliding') viewer.needsSlide = resized.slide;
-                        if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
-                        placeCaption(viewer.layout);
-                        placePanel(viewer.layout);
-                        applyRows(viewer.rowMotion === 'hold' ? 1 : (viewer.rowAmount || 0));
-                        viewer.settled = false;
-                    }
+                    clipOverlayToHeader();
+                    viewer.layout = layoutViewer(viewer.spec, viewer.slot);
+                    viewer.hiddenRows = hiddenRowsFor(viewer.layout);
+                    viewer.to = { x: viewer.layout.endLeft, y: viewer.layout.endTop, scale: 1 };
+                    const resized = openTargetFor(viewer.layout);
+                    viewer.openTo = resized.pose;
+                    if (viewer.phase !== 'sliding') viewer.needsSlide = resized.slide;
+                    if (activeFlyer) sizeFlyer(activeFlyer, viewer.layout);
+                    placeCaption(viewer.layout);
+                    placePanel(viewer.layout);
+                    applyRows(viewer.rowMotion === 'hold' ? 1 : (viewer.rowAmount || 0));
+                    viewer.settled = false;
                     return;
                 }
                 if (layoutWritesQuiet()) return;
@@ -6397,7 +7163,11 @@ function Clothing() {
             window.removeEventListener('wheel', interruptMobileOpenScroll);
             window.removeEventListener('touchstart', interruptMobileOpenScroll);
             window.removeEventListener('touchmove', interruptMobileOpenScroll);
+            window.removeEventListener('wheel', interruptSearchBandScroll);
+            window.removeEventListener('touchstart', interruptSearchBandScroll);
+            window.removeEventListener('touchmove', interruptSearchBandScroll);
             cancelMobileOpenScroll();
+            cancelSearchBandScroll();
             if (window.visualViewport) {
                 window.visualViewport.removeEventListener('resize', onResize);
                 window.visualViewport.removeEventListener('scroll', onScroll);

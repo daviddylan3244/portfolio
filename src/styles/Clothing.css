@@ -1,3 +1,7 @@
+html:has(.clothing-container) {
+    scrollbar-gutter: stable;
+}
+
 .clothing-container {
     min-height: 100vh;
     min-height: 100dvh;
@@ -213,6 +217,11 @@
     padding: 0;
     box-sizing: border-box;
     touch-action: pan-y;
+}
+
+.floating-streams.is-search-hidden {
+    overflow: hidden;
+    overflow: clip;
 }
 
 .floating-streams-row {
@@ -712,6 +721,39 @@
     pointer-events: auto;
 }
 
+/* Desktop search: an opened photo in a band under its row. */
+.stream-search-band {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    z-index: 3;
+    pointer-events: none;
+}
+
+.stream-search-board.is-band-slide .stream-search-band {
+    transition: top var(--band-slide-ms, 300ms) var(--band-slide-ease, ease);
+}
+
+.stream-band-photo {
+    transform-origin: 0 0;
+}
+
+.stream-panel.stream-band-panel {
+    position: absolute;
+    z-index: 1;
+}
+
+.stream-panel.stream-band-panel.is-shown {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.stream-close.stream-band-close {
+    position: absolute;
+    z-index: 2;
+    transition: opacity 150ms ease, background 150ms ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .stream-item,
     .stream-search-empty,
@@ -731,7 +773,9 @@
     .stream-search-copy,
     .stream-search-board.is-stacked.is-sliding .floating-streams-row,
     .floating-streams.is-band-slide .floating-streams-row,
-    .stream-mobile-photo {
+    .stream-mobile-photo,
+    .stream-search-board.is-band-slide .stream-search-band,
+    .stream-close.stream-band-close {
         transition: none;
     }
 }
