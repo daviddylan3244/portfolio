@@ -73,15 +73,18 @@ function parseText(raw) {
         if (parts.length < 5) {
             throw new Error(`line ${index + 1}: expected number | title | date | image | description`);
         }
-        const file = parts[3].replace(/\\/g, '/');
-        if (!file || file.includes('..')) {
-            throw new Error(`line ${index + 1}: bad image path ${file}`);
+        const files = parts[3]
+            .split(/\s*\+\s*/)
+            .map((file) => file.replace(/\\/g, '/').trim())
+            .filter(Boolean);
+        if (!files.length || files.some((file) => !file || file.includes('..'))) {
+            throw new Error(`line ${index + 1}: bad image path ${parts[3]}`);
         }
         const description = parts.slice(4).join(' | ').replace(/\\n\\n/g, '\n\n');
         current.items.push({
             title: parts[1],
             date: parts[2],
-            file,
+            files,
             description,
         });
     });
@@ -104,6 +107,7 @@ function loadSettings() {
 
 function itemLine(item) {
     const fields = ['type', 'src', 'title', 'date', 'description', 'width', 'height'];
+    if (item.images) fields.push('images');
     const body = fields
         .map((key) => `${JSON.stringify(key)}: ${JSON.stringify(item[key])}`)
         .join(', ');
@@ -133,18 +137,28 @@ function main() {
     const stacks = parsed.map((stack) => {
         const kept = settings.get(stack.title) || {};
         const items = stack.items.map((item) => {
-            const filePath = path.join(imageRoot, ...item.file.split('/'));
-            if (!fs.existsSync(filePath)) throw new Error(`missing image ${item.file}`);
-            const size = imageSize(filePath);
-            return {
+            const measured = item.files.map((file) => {
+                const filePath = path.join(imageRoot, ...file.split('/'));
+                if (!fs.existsSync(filePath)) throw new Error(`missing image ${file}`);
+                const size = imageSize(filePath);
+                return {
+                    src: `/Product-design/${file}`,
+                    width: size.width,
+                    height: size.height,
+                };
+            });
+            const first = measured[0];
+            const next = {
                 type: 'image',
-                src: `/Product-design/${item.file}`,
+                src: first.src,
                 title: item.title,
                 date: item.date,
                 description: item.description,
-                width: size.width,
-                height: size.height,
+                width: first.width,
+                height: first.height,
             };
+            if (measured.length > 1) next.images = measured;
+            return next;
         });
         return { title: stack.title, ...kept, items };
     });

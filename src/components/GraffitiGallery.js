@@ -39,6 +39,38 @@ const aspectOf = (item) => {
     return 1;
 };
 
+const itemImages = (item) => {
+    if (Array.isArray(item?.images) && item.images.length) {
+        return item.images
+            .filter((image) => image?.src)
+            .map((image) => ({
+                src: image.src,
+                width: Number(image.width) || 0,
+                height: Number(image.height) || 0,
+            }));
+    }
+    if (item?.type === 'image' && item.src) {
+        return [{
+            src: item.src,
+            width: Number(item.width) || 0,
+            height: Number(item.height) || 0,
+        }];
+    }
+    return [];
+};
+
+// Hover multi-prints use the same 3.5% white edge as a single page image.
+const PAGE_EDGE = 0.035;
+
+const pageStackAspect = (images) => {
+    const edge = PAGE_EDGE;
+    const total = images.reduce((sum, image) => {
+        const aspect = Math.max(0.2, aspectOf(image));
+        return sum + ((1 - edge * 2) / aspect) + edge * 2;
+    }, 0) + Math.max(0, images.length - 1) * edge;
+    return 1 / total;
+};
+
 const usesOwnCard = (stack, item) => (
     stack.cardShape === 'fixed'
     && stack.fit === 'cover'
@@ -460,12 +492,38 @@ const emptyRailCue = {
     ratio: 0,
 };
 
+const KEYBOARD_INPUT_KEYS = new Set([
+    'Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', ' ', 'Escape',
+]);
+
+let amlethInputMode = 'pointer';
+
+const getInputMode = () => amlethInputMode;
+
+const setInputMode = (mode) => {
+    if (amlethInputMode === mode) return;
+    amlethInputMode = mode;
+    document.documentElement.dataset.amlethInput = mode;
+};
+
+const bindInputModeTracking = () => {
+    document.documentElement.dataset.amlethInput = amlethInputMode;
+    const onKeyDown = (event) => {
+        if (KEYBOARD_INPUT_KEYS.has(event.key)) setInputMode('keyboard');
+    };
+    const onPointer = () => setInputMode('pointer');
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('pointerdown', onPointer, true);
+    document.addEventListener('pointermove', onPointer, true);
+    return () => {
+        document.removeEventListener('keydown', onKeyDown, true);
+        document.removeEventListener('pointerdown', onPointer, true);
+        document.removeEventListener('pointermove', onPointer, true);
+    };
+};
+
 function isKeyboardFocus(target) {
-    try {
-        return target.matches(':focus-visible');
-    } catch (err) {
-        return true;
-    }
+    return getInputMode() === 'keyboard' && target === document.activeElement;
 }
 
 function decodeImage(node) {
@@ -577,24 +635,71 @@ const contentBox = (img) => {
     };
 };
 
-function bakeStamp(text, width) {
-    const fontSize = Math.max(13, width * 0.1);
+// Stamp metrics are fractions of the folder width (the mockup's --w).
+// Ink matches the mockup's displacement of 2.4 at a 260px folder.
+const STAMP_FONT = '"Black Ops One"';
+const STAMP_FONT_SPEC = '400 16px "Black Ops One"';
+const STAMP_FALLBACK_FONT = 'Impact, "Arial Black", sans-serif';
+const STAMP_INK_REF_W = 260;
+const STAMP_INK_REF_SCALE = 2.4;
+const STAMP_REVEAL_MS = 1500;
+const stampCache = new Map();
+
+let stampFontName = '';
+let stampFontLocked = false;
+const stampFontWaiters = new Set();
+
+const notifyStampFont = () => {
+    stampFontWaiters.forEach((fn) => fn());
+};
+
+const stampFontIsReady = () => (
+    typeof document !== 'undefined'
+    && Boolean(document.fonts?.check?.(STAMP_FONT_SPEC))
+);
+
+const lockStampFallback = () => {
+    if (stampFontName === STAMP_FONT) return;
+    stampFontLocked = true;
+    stampFontName = STAMP_FALLBACK_FONT;
+    notifyStampFont();
+};
+
+if (typeof document !== 'undefined' && document.fonts?.load) {
+    if (stampFontIsReady()) stampFontName = STAMP_FONT;
+    document.fonts.load(STAMP_FONT_SPEC).then(() => {
+        if (stampFontLocked || !stampFontIsReady()) return;
+        stampFontName = STAMP_FONT;
+        notifyStampFont();
+    }).catch(() => undefined);
+}
+
+function bakeStamp(text, folderW, fontFamily) {
+    const safeW = Math.max(1, folderW);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const key = `${fontFamily}|${Math.round(safeW)}|${dpr}|${text}`;
+    const cached = stampCache.get(key);
+    if (cached) return cached;
+    const fontSize = safeW * 0.1;
     const padX = fontSize * 0.46;
     const padTop = fontSize * 0.34;
     const padBottom = fontSize * 0.26;
-    const border = Math.max(2, width * 0.011);
-    const outline = Math.max(1, width * 0.005);
-    const outlineOffset = Math.max(2, width * 0.012);
-    const innerW = Math.max(40, width - padX * 2 - border * 2 - (outline + outlineOffset) * 2);
+    const border = safeW * 0.011;
+    const outline = safeW * 0.005;
+    const outlineOffset = safeW * 0.012;
+    const maxBoxW = safeW * 0.72;
+    const maxLineW = Math.max(1, maxBoxW - padX * 2 - border * 2);
+    const font = `400 ${fontSize}px ${fontFamily}`;
+    const tracking = `${fontSize * 0.05}px`;
     const probe = document.createElement('canvas').getContext('2d');
-    probe.font = `${fontSize}px "Black Ops One"`;
-    probe.letterSpacing = `${fontSize * 0.05}px`;
+    probe.font = font;
+    probe.letterSpacing = tracking;
     const words = String(text).toUpperCase().split(/\s+/).filter(Boolean);
     const lines = [];
     let current = '';
     words.forEach((word) => {
         const next = current ? `${current} ${word}` : word;
-        if (current && probe.measureText(next).width > innerW) {
+        if (current && probe.measureText(next).width > maxLineW) {
             lines.push(current);
             current = word;
         } else {
@@ -604,16 +709,19 @@ function bakeStamp(text, width) {
     if (current) lines.push(current);
     const lineH = fontSize * 1.02;
     const textH = Math.max(lineH, lines.length * lineH);
-    const boxW = width;
-    const boxH = padTop + textH + padBottom + border * 2 + (outline + outlineOffset) * 2;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const widest = lines.reduce((max, line) => Math.max(max, probe.measureText(line).width), 0);
+    const borderBoxW = widest + padX * 2 + border * 2;
+    const borderBoxH = padTop + textH + padBottom + border * 2;
+    const rim = outline + outlineOffset;
+    const boxW = borderBoxW + rim * 2;
+    const boxH = borderBoxH + rim * 2;
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.ceil(boxW * dpr));
     canvas.height = Math.max(1, Math.ceil(boxH * dpr));
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    ctx.font = `${fontSize}px "Black Ops One"`;
-    ctx.letterSpacing = `${fontSize * 0.05}px`;
+    ctx.font = font;
+    ctx.letterSpacing = tracking;
     ctx.fillStyle = '#b2281f';
     ctx.strokeStyle = '#b2281f';
     ctx.textAlign = 'center';
@@ -621,49 +729,72 @@ function bakeStamp(text, width) {
     ctx.lineWidth = outline;
     ctx.strokeRect(outline / 2, outline / 2, boxW - outline, boxH - outline);
     ctx.lineWidth = border;
-    const edge = outline + outlineOffset + border / 2;
+    const edge = rim + border / 2;
     ctx.strokeRect(edge, edge, boxW - edge * 2, boxH - edge * 2);
     lines.forEach((line, index) => {
-        const y = outline + outlineOffset + border + padTop + lineH * (index + 0.5);
+        const y = rim + border + padTop + lineH * (index + 0.5);
         ctx.fillText(line, boxW / 2, y);
     });
-    const baked = document.createElement('canvas');
-    baked.width = canvas.width;
-    baked.height = canvas.height;
-    const out = baked.getContext('2d');
+    const rough = document.createElement('canvas');
+    rough.width = canvas.width;
+    rough.height = canvas.height;
+    const out = rough.getContext('2d');
+    const filter = document.getElementById('design-stamp-ink');
+    const displacement = filter?.querySelector('feDisplacementMap');
+    const prevScale = displacement?.getAttribute('scale');
+    if (displacement) {
+        displacement.setAttribute(
+            'scale',
+            String(STAMP_INK_REF_SCALE * (safeW / STAMP_INK_REF_W) * dpr)
+        );
+    }
+    let url = '';
     try {
         out.filter = 'url(#design-stamp-ink)';
         out.drawImage(canvas, 0, 0);
-        if (out.filter !== 'none') return baked.toDataURL('image/png');
+        url = (out.filter !== 'none' ? rough : canvas).toDataURL('image/png');
     } catch (err) {
-        // The live filter could not be applied; the plain drawing is still one bitmap.
+        url = canvas.toDataURL('image/png');
+    } finally {
+        if (displacement && prevScale != null) displacement.setAttribute('scale', prevScale);
     }
-    return canvas.toDataURL('image/png');
+    const baked = {
+        src: url,
+        width: canvas.width / dpr,
+        height: canvas.height / dpr,
+    };
+    stampCache.set(key, baked);
+    return baked;
 }
 
-function BakedStamp({ text, measureWidth, moving }) {
-    const [src, setSrc] = useState('');
+function BakedStamp({ text, measureWidth, moving, holdUntilBaked = false, onBaked }) {
+    const [baked, setBaked] = useState(null);
+    const [fontFamily, setFontFamily] = useState(stampFontName);
     const movingRef = useRef(moving);
+    const onBakedRef = useRef(onBaked);
     movingRef.current = moving;
-
-    const bake = useCallback(() => {
-        if (movingRef.current) return false;
-        const width = measureWidth();
-        if (!(width > 0) || !document.fonts.check('16px "Black Ops One"')) return false;
-        setSrc(bakeStamp(text, width));
-        return true;
-    }, [measureWidth, text]);
+    onBakedRef.current = onBaked;
 
     useLayoutEffect(() => {
-        if (bake()) return undefined;
-        let cancelled = false;
-        document.fonts.ready.then(() => {
-            if (!cancelled) bake();
-        });
-        return () => {
-            cancelled = true;
+        const apply = () => {
+            if (stampFontName) setFontFamily(stampFontName);
         };
-    }, [bake]);
+        apply();
+        stampFontWaiters.add(apply);
+        return () => stampFontWaiters.delete(apply);
+    }, []);
+
+    const bake = useCallback(() => {
+        if (movingRef.current || !fontFamily) return false;
+        const width = measureWidth();
+        if (!(width > 0)) return false;
+        setBaked(bakeStamp(text, width, fontFamily));
+        return true;
+    }, [fontFamily, measureWidth, text]);
+
+    useLayoutEffect(() => {
+        if (bake()) onBakedRef.current?.(text);
+    }, [bake, text]);
 
     useEffect(() => {
         if (moving) return undefined;
@@ -672,18 +803,26 @@ function BakedStamp({ text, measureWidth, moving }) {
         return () => window.removeEventListener('resize', onResize);
     }, [bake, moving]);
 
-    if (!src) return <span className="design-file-stamp">{text}</span>;
+    if (!baked) {
+        if (holdUntilBaked) {
+            return <span className="design-file-stamp is-baking" aria-hidden="true" />;
+        }
+        return <span className="design-file-stamp">{text}</span>;
+    }
     return (
         <img
             className="design-file-stamp is-baked"
-            src={src}
+            src={baked.src}
             alt=""
             draggable={false}
+            width={baked.width}
+            height={baked.height}
+            style={{ width: `${baked.width}px`, height: `${baked.height}px` }}
         />
     );
 }
 
-function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, onOpenDetail, onOpenFile }) {
+function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, onOpenDetail, onOpenFile, onStampBaked }) {
     const fileRef = useRef(null);
     const coverRef = useRef(null);
     const pageRefs = useRef([]);
@@ -936,7 +1075,12 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
 
     const openDetail = (index) => {
         const img = pages()[index]?.querySelector('.design-file-mount img');
-        propsRef.current.onOpenDetail?.(stackIndex, index, contentBox(img));
+        const stage = fileRef.current?.querySelector('.design-file-stage')?.getBoundingClientRect();
+        const stageBox = stage
+            ? { left: stage.left, top: stage.top, width: stage.width, height: stage.height }
+            : null;
+        const wasOpen = stateRef.current.open;
+        propsRef.current.onOpenDetail?.(stackIndex, index, contentBox(img), stageBox, wasOpen);
         closeNow();
     };
 
@@ -971,13 +1115,8 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
 
     const measureStampWidth = useCallback(() => {
         if (stateRef.current.open || stateRef.current.closing) return 0;
-        const face = fileRef.current?.querySelector('.design-file-cover .design-file-face.is-front');
-        if (!face) return 0;
-        const style = getComputedStyle(face);
-        const contentW = face.clientWidth
-            - (parseFloat(style.paddingLeft) || 0)
-            - (parseFloat(style.paddingRight) || 0);
-        return contentW * 0.88;
+        const cover = fileRef.current?.querySelector('.design-file-cover');
+        return cover?.offsetWidth || 0;
     }, []);
 
     const onPointerDown = (event) => {
@@ -1020,7 +1159,7 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
             state.manual = true;
             clearAuto();
             if (state.turned < pages().length - 1) turnForward();
-            else flipAllBack();
+            else if (pages().length > 1) flipAllBack();
         } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
             event.preventDefault();
             if (!state.open || state.flipping) return;
@@ -1092,8 +1231,10 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
                                 >
                                     <span className="design-file-face is-front">
                                         <PaperClip />
-                                        <span className="design-file-mount">
-                                            {item.type === 'image' && item.src ? (
+                                        <span className={`design-file-mount${itemImages(item).length > 1 ? ' is-multi' : ''}`}>
+                                            {itemImages(item).length > 1 ? (
+                                                <PagePictures item={item} priority={itemIndex === 0} />
+                                            ) : item.type === 'image' && item.src ? (
                                                 <img
                                                     src={pageSrc(item.src)}
                                                     width={item.width}
@@ -1126,6 +1267,8 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
                                 text={stack.title}
                                 measureWidth={measureStampWidth}
                                 moving={false}
+                                holdUntilBaked
+                                onBaked={onStampBaked}
                             />
                         </span>
                         <span className="design-file-face is-inside">
@@ -1151,6 +1294,762 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
     );
 }
 
+// The folders open into FolderViewer. The grid and detail overlay below are
+// kept but unreachable while this is false.
+const LEGACY_OVERLAY = false;
+
+const VIEWER_FILL = 0.9;
+const VIEWER_SINGLE_PX = 640;
+const VIEWER_ARROW = 44;
+const VIEWER_ARROW_GAP = 20;
+const VIEWER_FADE_MS = 300;
+const VIEWER_SWIPE_PX = 40;
+const VIEWER_MARGIN = 24;
+// CSS tab height is 0.075 of the stage; measure overwrites this after layout.
+const VIEWER_TAB_RATIO = 0.075;
+
+const viewerGeometry = (vw, vh, tabRatio = VIEWER_TAB_RATIO) => {
+    const single = vw <= VIEWER_SINGLE_PX;
+    const ratio = Math.max(0.04, tabRatio);
+    // Desktop: half-spread w, with arrows outside and VIEWER_MARGIN from the edge.
+    const maxW = single
+        ? vw - VIEWER_MARGIN * 2
+        : (vw / 2) - VIEWER_ARROW - VIEWER_ARROW_GAP - VIEWER_MARGIN;
+    // Visible height is the tab plus the back panel.
+    const tall = 1.29 * (1 + ratio);
+    const maxWFromH = (vh - VIEWER_MARGIN * 2) / tall;
+    const raw = Math.min(
+        maxW,
+        maxWFromH,
+        single ? vw * VIEWER_FILL : (vw * VIEWER_FILL) / 2
+    );
+    const w = Math.max(120, Math.floor(raw));
+    const h = w * 1.29;
+    const tabH = h * ratio;
+    const totalH = h + tabH;
+    const fileTop = Math.max(VIEWER_MARGIN, (vh - totalH) / 2);
+    const fileLeft = (vw - w) / 2;
+    return {
+        vw,
+        vh,
+        single,
+        w,
+        h,
+        tabH,
+        fileTop,
+        fileLeft,
+        stageTop: fileTop + tabH,
+    };
+};
+
+const applyViewerGeo = (file, geo) => {
+    if (!file || !geo) return;
+    file.style.left = `${geo.fileLeft}px`;
+    file.style.top = `${geo.fileTop}px`;
+    file.style.paddingTop = `${geo.tabH}px`;
+    file.style.setProperty('--w', `${geo.w}px`);
+    file.style.setProperty('--h', `${geo.h}px`);
+};
+
+const measureViewerTabRatio = (file) => {
+    const tab = file?.querySelector('.design-file-tab');
+    const stage = file?.querySelector('.design-file-stage');
+    const label = tab?.querySelector('.design-file-tab-label');
+    if (!tab || !stage) return VIEWER_TAB_RATIO;
+    const stageRect = stage.getBoundingClientRect();
+    if (!(stageRect.height > 0)) return VIEWER_TAB_RATIO;
+    const tabRect = tab.getBoundingClientRect();
+    const labelTop = label ? label.getBoundingClientRect().top : tabRect.top;
+    const above = stageRect.top - Math.min(tabRect.top, labelTop);
+    if (!(above > 0)) return VIEWER_TAB_RATIO;
+    return above / stageRect.height;
+};
+
+const computeViewerGeo = (file) => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let geo = viewerGeometry(vw, vh, VIEWER_TAB_RATIO);
+    applyViewerGeo(file, geo);
+    void file.offsetWidth;
+    let ratio = measureViewerTabRatio(file);
+    geo = viewerGeometry(vw, vh, ratio);
+    applyViewerGeo(file, geo);
+    void file.offsetWidth;
+    const again = measureViewerTabRatio(file);
+    if (Math.abs(again - ratio) > 0.002) {
+        geo = viewerGeometry(vw, vh, again);
+        applyViewerGeo(file, geo);
+    }
+    return geo;
+};
+
+const viewerWindow = (index, count) => (
+    [index - 1, index, index + 1, index + 2].filter((i) => i >= 0 && i < count)
+);
+
+function PagePictures({ item, priority = false }) {
+    const images = itemImages(item);
+    return (
+        <span className="design-file-prints" style={{ '--stack-aspect': pageStackAspect(images) }}>
+            {images.map((image, imageIndex) => (
+                <span
+                    key={image.src}
+                    className="design-file-print"
+                    style={{
+                        aspectRatio: image.width > 0 && image.height > 0
+                            ? `${image.width} / ${image.height}`
+                            : '1 / 1',
+                    }}
+                >
+                    <img
+                        src={pageSrc(image.src)}
+                        width={image.width}
+                        height={image.height}
+                        alt=""
+                        draggable={false}
+                        decoding="async"
+                        fetchPriority={priority && imageIndex === 0 ? 'high' : 'low'}
+                    />
+                </span>
+            ))}
+        </span>
+    );
+}
+
+const viewerPrint = (item, geo) => {
+    const leafW = geo.w * 0.97;
+    const leafH = geo.h * 0.95;
+    const areaW = leafW * (geo.single ? 0.84 : 0.82);
+    const areaH = leafH * (geo.single ? 0.5 : 0.81);
+    const border = Math.max(4, Math.round(Math.min(areaW, areaH) * 0.03));
+    const inner = fitRect(aspectOf(item), areaW - border * 2, areaH - border * 2);
+    return {
+        w: Math.round(inner.w + border * 2),
+        h: Math.round(inner.h + border * 2),
+        border,
+    };
+};
+
+function ViewerText({ item, index, count, below = false }) {
+    const copy = itemCopy(item);
+    return (
+        <span className={`folder-viewer-text${below ? ' is-below' : ''}`}>
+            <span className="folder-viewer-title">{copy.title}</span>
+            {copy.date ? <span className="folder-viewer-date">{copy.date}</span> : null}
+            {copy.description ? <span className="folder-viewer-desc">{copy.description}</span> : null}
+            <span className="folder-viewer-item">Item {index + 1} of {count}</span>
+        </span>
+    );
+}
+
+function ViewerFrame({ image, contentW, border, load, title, clip = false }) {
+    const [fullReady, setFullReady] = useState(false);
+    useEffect(() => {
+        setFullReady(false);
+    }, [image.src, load]);
+    const aspect = Math.max(0.2, aspectOf(image));
+    const width = Math.round(contentW + border * 2);
+    const height = Math.round(contentW / aspect + border * 2);
+    return (
+        <span
+            className="folder-viewer-print"
+            style={{
+                width: `${width}px`,
+                height: `${height}px`,
+                '--b': `${border}px`,
+            }}
+        >
+            {clip ? <PaperClip /> : null}
+            <img
+                className="folder-viewer-image is-small"
+                src={pageSrc(image.src)}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+                decoding="async"
+            />
+            {load ? (
+                <img
+                    className={`folder-viewer-image is-full${fullReady ? ' is-ready' : ''}`}
+                    src={image.src}
+                    alt={title}
+                    draggable={false}
+                    decoding="async"
+                    onLoad={() => setFullReady(true)}
+                    onError={() => setFullReady(true)}
+                />
+            ) : null}
+        </span>
+    );
+}
+
+function ViewerSingle({ item, geo, load, top = false }) {
+    const print = viewerPrint(item, geo);
+    const { title } = itemCopy(item);
+    const [fullReady, setFullReady] = useState(false);
+    useEffect(() => {
+        setFullReady(false);
+    }, [item?.src, load]);
+    return (
+        <span className={`folder-viewer-mount${top ? ' is-top' : ''}`}>
+            <span
+                className="folder-viewer-print"
+                style={{ width: `${print.w}px`, height: `${print.h}px`, '--b': `${print.border}px` }}
+            >
+                <PaperClip />
+                {item.type === 'image' && item.src ? (
+                    <>
+                        <img
+                            className="folder-viewer-image is-small"
+                            src={pageSrc(item.src)}
+                            alt=""
+                            aria-hidden="true"
+                            draggable={false}
+                            decoding="async"
+                        />
+                        {load ? (
+                            <img
+                                className={`folder-viewer-image is-full${fullReady ? ' is-ready' : ''}`}
+                                src={item.src}
+                                alt={title}
+                                draggable={false}
+                                decoding="async"
+                                onLoad={() => setFullReady(true)}
+                                onError={() => setFullReady(true)}
+                            />
+                        ) : null}
+                    </>
+                ) : null}
+            </span>
+        </span>
+    );
+}
+
+function ViewerMount({ item, geo, load, top = false }) {
+    const images = itemImages(item);
+    const { title } = itemCopy(item);
+    if (images.length <= 1) {
+        return <ViewerSingle item={item} geo={geo} load={load} top={top} />;
+    }
+    const leafW = geo.w * 0.97;
+    const leafH = geo.h * 0.95;
+    const areaW = leafW * (geo.single ? 0.84 : 0.82);
+    const areaH = leafH * (geo.single ? 0.5 : 0.81);
+    const border = Math.max(4, Math.round(Math.min(areaW, areaH) * 0.03));
+    const sumInv = images.reduce((sum, image) => sum + (1 / Math.max(0.2, aspectOf(image))), 0);
+    const contentW = Math.max(1, Math.min(
+        areaW - border * 2,
+        (areaH - (images.length * 3 - 1) * border) / sumInv
+    ));
+    return (
+        <span className={`folder-viewer-mount is-stack${top ? ' is-top' : ''}`}>
+            <span className="folder-viewer-stack" style={{ gap: `${border}px` }}>
+                {images.map((image, imageIndex) => (
+                    <ViewerFrame
+                        key={image.src}
+                        image={image}
+                        contentW={contentW}
+                        border={border}
+                        load={load}
+                        title={imageIndex === 0 ? title : ''}
+                        clip={imageIndex === 0}
+                    />
+                ))}
+            </span>
+        </span>
+    );
+}
+
+function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, getRestRect, onClosed }) {
+    const count = stack.items.length;
+    const number = fileNumber(stackIndex);
+    const [geo, setGeo] = useState(() => viewerGeometry(window.innerWidth, window.innerHeight));
+    const [geoReady, setGeoReady] = useState(false);
+    const [index, setIndex] = useState(startIndex);
+    const [phase, setPhase] = useState('opening');
+    const [on, setOn] = useState(false);
+    const [loaded, setLoaded] = useState(() => new Set(viewerWindow(startIndex, count)));
+    const rootRef = useRef(null);
+    const fileRef = useRef(null);
+    const coverRef = useRef(null);
+    const leafRefs = useRef([]);
+    const indexRef = useRef(startIndex);
+    const phaseRef = useRef('opening');
+    const geoRef = useRef(geo);
+    const timersRef = useRef([]);
+    const leafTimersRef = useRef(new Map());
+    const swipeRef = useRef(null);
+    geoRef.current = geo;
+
+    const leaves = () => leafRefs.current.slice(0, count).filter(Boolean);
+
+    const later = (ms, fn) => {
+        const id = window.setTimeout(() => {
+            timersRef.current = timersRef.current.filter((timer) => timer !== id);
+            fn();
+        }, ms);
+        timersRef.current.push(id);
+    };
+
+    const leafLater = (leafIndex, ms, fn) => {
+        const map = leafTimersRef.current;
+        window.clearTimeout(map.get(leafIndex));
+        map.set(leafIndex, window.setTimeout(() => {
+            map.delete(leafIndex);
+            fn();
+        }, ms));
+    };
+
+    const clearAll = () => {
+        timersRef.current.forEach((timer) => window.clearTimeout(timer));
+        timersRef.current = [];
+        leafTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        leafTimersRef.current.clear();
+    };
+
+    const enterPhase = (next) => {
+        phaseRef.current = next;
+        setPhase(next);
+    };
+
+    // Measure the real tab and commit size/position before the open flight starts.
+    useLayoutEffect(() => {
+        const file = fileRef.current;
+        if (!file) return undefined;
+        const nextGeo = computeViewerGeo(file);
+        setGeo(nextGeo);
+        geoRef.current = nextGeo;
+        setGeoReady(true);
+        return undefined;
+    }, []);
+
+    useLayoutEffect(() => {
+        if (!geoReady) return undefined;
+        const file = fileRef.current;
+        const cover = coverRef.current;
+        if (!file || !cover) return undefined;
+        applyViewerGeo(file, geoRef.current);
+        const list = leaves();
+        const k = startIndex;
+        const startOpen = wasOpen || reduced;
+        file.classList.add('no-anim');
+        list.forEach((leaf, i) => {
+            const turned = startOpen && i < k;
+            leaf.classList.toggle('is-turned', turned);
+            leaf.style.zIndex = String(turned ? 200 + i : 100 - i);
+        });
+        if (startOpen) {
+            file.classList.add('is-open');
+            cover.classList.add('is-low');
+        }
+        rootRef.current?.focus({ preventScroll: true });
+        if (reduced) {
+            void file.offsetWidth;
+            file.classList.remove('no-anim');
+            file.style.transition = 'none';
+            file.style.transform = 'none';
+            setOn(true);
+            later(VIEWER_FADE_MS, () => enterPhase('open'));
+            return clearAll;
+        }
+        const wrap = file.getBoundingClientRect();
+        const box = file.querySelector('.design-file-stage').getBoundingClientRect();
+        if (from && from.width > 0 && box.width > 0) {
+            const s = from.width / box.width;
+            const x = from.left - wrap.left - s * (box.left - wrap.left);
+            const y = from.top - wrap.top - s * (box.top - wrap.top);
+            file.style.transition = 'none';
+            file.style.transformOrigin = '0 0';
+            file.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
+        }
+        void file.offsetWidth;
+        file.classList.remove('no-anim');
+        file.style.transition = `transform ${FILE_OPEN_MS}ms var(--file-ease)`;
+        file.style.transformOrigin = '0 0';
+        file.style.transform = 'none';
+        setOn(true);
+        if (!startOpen) {
+            file.classList.add('is-open');
+            list.forEach((leaf, i) => {
+                if (i < k) leaf.classList.add('is-with-cover', 'is-turned');
+            });
+            later(FILE_OPEN_MS * 0.55, () => {
+                cover.classList.add('is-low');
+                list.forEach((leaf, i) => {
+                    if (i < k) leaf.style.zIndex = String(200 + i);
+                });
+            });
+        }
+        later(FILE_OPEN_MS + 30, () => {
+            list.forEach((leaf) => leaf.classList.remove('is-with-cover'));
+            file.style.transition = 'none';
+            file.style.transform = 'none';
+            void file.offsetWidth;
+            file.style.transition = '';
+            enterPhase('open');
+        });
+        return clearAll;
+    }, [geoReady]);
+
+    useEffect(() => {
+        setLoaded((prev) => {
+            const want = viewerWindow(index, count);
+            if (want.every((i) => prev.has(i))) return prev;
+            const next = new Set(prev);
+            want.forEach((i) => next.add(i));
+            return next;
+        });
+    }, [index, count]);
+
+    useEffect(() => {
+        if (phase !== 'open') return undefined;
+        const onResize = () => {
+            const file = fileRef.current;
+            if (!file) {
+                setGeo(viewerGeometry(window.innerWidth, window.innerHeight));
+                return;
+            }
+            const nextGeo = computeViewerGeo(file);
+            setGeo(nextGeo);
+            geoRef.current = nextGeo;
+        };
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, [phase]);
+
+    const turnForward = (i) => {
+        const leaf = leaves()[i];
+        if (!leaf) return;
+        if (reduced) {
+            leaf.classList.add('is-hiding');
+            leafLater(i, VIEWER_FADE_MS, () => {
+                leaf.style.zIndex = String(200 + i);
+                leaf.classList.add('is-turned');
+                leaf.classList.remove('is-hiding');
+            });
+            return;
+        }
+        leaf.style.zIndex = String(200 + i);
+        leaf.classList.add('is-turned', 'is-turning');
+        leafLater(i, FILE_TURN_MS * 0.6, () => leaf.classList.remove('is-turning'));
+    };
+
+    const turnBack = (i) => {
+        const leaf = leaves()[i];
+        if (!leaf) return;
+        if (reduced) {
+            leaf.classList.add('is-hiding');
+            leafLater(i, VIEWER_FADE_MS, () => {
+                leaf.classList.remove('is-turned', 'is-hiding');
+                leafLater(i, VIEWER_FADE_MS, () => {
+                    leaf.style.zIndex = String(100 - i);
+                });
+            });
+            return;
+        }
+        leaf.classList.remove('is-turned', 'is-turning');
+        leafLater(i, FILE_TURN_MS, () => {
+            leaf.style.zIndex = String(100 - i);
+        });
+    };
+
+    const goNext = () => {
+        if (phaseRef.current !== 'open') return;
+        const k = indexRef.current;
+        if (k >= count - 1) return;
+        turnForward(k);
+        indexRef.current = k + 1;
+        setIndex(k + 1);
+    };
+
+    const goBack = () => {
+        if (phaseRef.current !== 'open') return;
+        const k = indexRef.current;
+        if (k <= 0) return;
+        turnBack(k - 1);
+        indexRef.current = k - 1;
+        setIndex(k - 1);
+    };
+
+    const close = () => {
+        if (phaseRef.current !== 'open') return;
+        // Capture at close start so mouse movement during the flight cannot
+        // change whether focus returns to the folder.
+        const restoreFocus = getInputMode() === 'keyboard';
+        enterPhase('closing');
+        clearAll();
+        const file = fileRef.current;
+        const cover = coverRef.current;
+        if (reduced || !file || !cover) {
+            setOn(false);
+            later(VIEWER_FADE_MS, () => onClosed(restoreFocus));
+            return;
+        }
+        const rest = getRestRect();
+        const wrap = file.getBoundingClientRect();
+        const box = file.querySelector('.design-file-stage').getBoundingClientRect();
+        // The open stage is shifted right by half a page; closing removes that
+        // shift, so the flight target must aim at the unshifted stage.
+        const stageShift = geoRef.current.single ? 0 : box.width * 0.5;
+        file.classList.add('is-closing');
+        leaves().forEach((leaf) => {
+            if (!leaf.classList.contains('is-turned')) return;
+            leaf.classList.add('is-with-cover');
+            leaf.classList.remove('is-turned', 'is-turning', 'is-hiding');
+        });
+        later(FILE_OPEN_MS * 0.45, () => cover.classList.remove('is-low'));
+        file.classList.remove('is-open');
+        if (rest && rest.width > 0 && box.width > 0) {
+            const s = rest.width / box.width;
+            const localX = box.left - wrap.left - stageShift;
+            const localY = box.top - wrap.top;
+            const x = rest.left - wrap.left - s * localX;
+            const y = rest.top - wrap.top - s * localY;
+            file.style.transition = `transform ${FILE_OPEN_MS}ms var(--file-ease)`;
+            file.style.transformOrigin = '0 0';
+            file.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
+        }
+        setOn(false);
+        later(FILE_OPEN_MS + 20, () => onClosed(restoreFocus));
+    };
+
+    const actionsRef = useRef(null);
+    actionsRef.current = { goNext, goBack, close };
+
+    useEffect(() => {
+        const onKeyDown = (event) => {
+            const actions = actionsRef.current;
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                actions.close();
+            } else if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                actions.goNext();
+            } else if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                actions.goBack();
+            } else if (event.key === 'Tab') {
+                const root = rootRef.current;
+                const focusable = root ? [...root.querySelectorAll('button:not([disabled])')] : [];
+                if (!focusable.length) {
+                    event.preventDefault();
+                    return;
+                }
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                const active = document.activeElement;
+                if (event.shiftKey && (active === first || !root.contains(active) || active === root)) {
+                    event.preventDefault();
+                    last.focus();
+                } else if (!event.shiftKey && (active === last || !root.contains(active))) {
+                    event.preventDefault();
+                    first.focus();
+                }
+            }
+        };
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, []);
+
+    const beginSwipe = (x, y) => {
+        swipeRef.current = { x, y, swiped: false };
+    };
+
+    const endSwipe = (x, y) => {
+        const start = swipeRef.current;
+        if (!start) return;
+        const dx = x - start.x;
+        const dy = y - start.y;
+        if (Math.abs(dx) > VIEWER_SWIPE_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+            start.swiped = true;
+            window.setTimeout(() => {
+                if (swipeRef.current === start) swipeRef.current = null;
+            }, 400);
+            if (dx < 0) goNext();
+            else goBack();
+        }
+    };
+
+    const onPointerDown = (event) => {
+        beginSwipe(event.clientX, event.clientY);
+    };
+
+    const onPointerUp = (event) => {
+        endSwipe(event.clientX, event.clientY);
+    };
+
+    const onTouchStart = (event) => {
+        const touch = event.changedTouches[0];
+        if (touch) beginSwipe(touch.clientX, touch.clientY);
+    };
+
+    const onTouchEnd = (event) => {
+        const touch = event.changedTouches[0];
+        if (touch) endSwipe(touch.clientX, touch.clientY);
+    };
+
+    const onBookClick = (event) => {
+        event.stopPropagation();
+        if (swipeRef.current?.swiped) {
+            swipeRef.current = null;
+            return;
+        }
+        if (geoRef.current.single) {
+            if (event.clientX >= geoRef.current.vw / 2) goNext();
+            else goBack();
+            return;
+        }
+        const onLeft = event.target.closest(
+            '.design-file-cover, .folder-viewer-leaf.is-turned, .folder-viewer-face.is-back'
+        );
+        if (onLeft) goBack();
+        else goNext();
+    };
+
+    const measureViewerStampWidth = useCallback(() => {
+        const cover = fileRef.current?.querySelector('.design-file-cover');
+        return cover?.offsetWidth || geo.w;
+    }, [geo.w]);
+
+    const current = stack.items[index];
+    const arrowTop = geo.stageTop + geo.h / 2 - VIEWER_ARROW / 2;
+    const leftArrow = Math.max(8, geo.vw / 2 - geo.w - VIEWER_ARROW_GAP - VIEWER_ARROW);
+    const rightArrow = Math.min(geo.vw - VIEWER_ARROW - 8, geo.vw / 2 + geo.w + VIEWER_ARROW_GAP);
+
+    return (
+        <div
+            className={[
+                'folder-viewer',
+                on ? 'is-on' : '',
+                phase === 'open' ? 'is-ready' : '',
+                phase === 'closing' ? 'is-closing' : '',
+                geo.single ? 'is-single' : '',
+                reduced ? 'is-reduced' : '',
+            ].filter(Boolean).join(' ')}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${stack.title}, file ${number}`}
+            tabIndex={-1}
+            ref={rootRef}
+        >
+            <div className="folder-viewer-backdrop" onClick={close} />
+            <span
+                className="design-file folder-viewer-file"
+                ref={fileRef}
+                style={{
+                    left: `${geo.fileLeft}px`,
+                    top: `${geo.fileTop}px`,
+                    paddingTop: `${geo.tabH}px`,
+                    '--w': `${geo.w}px`,
+                    '--h': `${geo.h}px`,
+                }}
+                onClick={onBookClick}
+                onPointerDown={onPointerDown}
+                onPointerUp={onPointerUp}
+                onTouchStart={onTouchStart}
+                onTouchEnd={onTouchEnd}
+            >
+                <span className="design-file-stage">
+                    <span className="design-file-back">
+                        <span className="design-file-tab">
+                            <span className="design-file-tab-label">FILE {number}</span>
+                        </span>
+                    </span>
+                    <span className="design-file-pages">
+                        {stack.items.map((item, itemIndex) => (
+                            <span
+                                key={itemIndex}
+                                className="folder-viewer-leaf"
+                                ref={(node) => {
+                                    leafRefs.current[itemIndex] = node;
+                                }}
+                            >
+                                <span className="folder-viewer-face is-front">
+                                    <ViewerMount
+                                        item={item}
+                                        geo={geo}
+                                        load={loaded.has(itemIndex)}
+                                        top={geo.single}
+                                    />
+                                    {geo.single ? (
+                                        <ViewerText item={item} index={itemIndex} count={count} below />
+                                    ) : null}
+                                </span>
+                                <span className="folder-viewer-face is-back">
+                                    {!geo.single && stack.items[itemIndex + 1] ? (
+                                        <ViewerText
+                                            item={stack.items[itemIndex + 1]}
+                                            index={itemIndex + 1}
+                                            count={count}
+                                        />
+                                    ) : null}
+                                </span>
+                            </span>
+                        ))}
+                    </span>
+                    <span className="design-file-cover" ref={coverRef}>
+                        <span className="design-file-face is-front">
+                            <span className="design-file-typed">
+                                <span>Design Work</span>
+                                <span>File No. {number}</span>
+                                <span>Contents: {count} {count === 1 ? 'item' : 'items'}</span>
+                            </span>
+                            <BakedStamp
+                                text={stack.title}
+                                measureWidth={measureViewerStampWidth}
+                                moving={phase === 'closing'}
+                                holdUntilBaked
+                            />
+                        </span>
+                        <span className="design-file-face is-inside">
+                            {!geo.single ? (
+                                <span className="folder-viewer-sheet">
+                                    <ViewerText item={stack.items[0]} index={0} count={count} />
+                                </span>
+                            ) : null}
+                        </span>
+                    </span>
+                </span>
+            </span>
+            {!geo.single && count > 1 ? (
+                <>
+                    <button
+                        type="button"
+                        className="folder-viewer-arrow is-back"
+                        style={{ left: `${leftArrow}px`, top: `${arrowTop}px` }}
+                        aria-label="Previous piece"
+                        disabled={index <= 0}
+                        onClick={goBack}
+                    >
+                        ‹
+                    </button>
+                    <button
+                        type="button"
+                        className="folder-viewer-arrow is-next"
+                        style={{ left: `${rightArrow}px`, top: `${arrowTop}px` }}
+                        aria-label="Next piece"
+                        disabled={index >= count - 1}
+                        onClick={goNext}
+                    >
+                        ›
+                    </button>
+                </>
+            ) : null}
+            <button
+                type="button"
+                className="folder-viewer-close"
+                aria-label="Close"
+                onClick={close}
+            >
+                ×
+            </button>
+            <span className="folder-viewer-sr" aria-live="polite">
+                {`${itemCopy(current).title}, item ${index + 1} of ${count}`}
+            </span>
+        </div>
+    );
+}
+
 const GraffitiGallery = () => {
     const navigate = useNavigate();
     const stacks = designStacks;
@@ -1158,6 +2057,7 @@ const GraffitiGallery = () => {
     const [openStack, setOpenStack] = useState(null);
     const [isLeaving, setIsLeaving] = useState(false);
     const [restoreFolder, setRestoreFolder] = useState(false);
+    const [viewer, setViewer] = useState(null);
     const [origin] = useState({ x: 0, y: 0 });
     const [detailIndex, setDetailIndex] = useState(null);
     const [copyVisible, setCopyVisible] = useState(false);
@@ -1216,6 +2116,21 @@ const GraffitiGallery = () => {
         }),
         []
     );
+
+    useEffect(() => bindInputModeTracking(), []);
+
+    const [gridHold, setGridHold] = useState(() => !stampFontIsReady());
+    const bakedStampsRef = useRef(new Set());
+    const onStampBaked = useCallback((text) => {
+        bakedStampsRef.current.add(text);
+        if (bakedStampsRef.current.size >= stacks.length) setGridHold(false);
+    }, [stacks.length]);
+
+    useEffect(() => {
+        if (!gridHold) return undefined;
+        const id = window.setTimeout(lockStampFallback, STAMP_REVEAL_MS);
+        return () => window.clearTimeout(id);
+    }, [gridHold]);
 
     const isOpen = Number.isInteger(openStack);
     const inDetail = detailIndex != null;
@@ -1609,12 +2524,13 @@ const GraffitiGallery = () => {
         if (!stack || preloadedRef.current.has(stackIndex)) return;
         const images = [];
         stack.items.forEach((item) => {
-            if (item.type !== 'image' || !item.src) return;
-            const preload = new Image();
-            preload.decoding = 'async';
-            preload.src = item.src;
-            decodeImage(preload);
-            images.push(preload);
+            itemImages(item).forEach((image) => {
+                const preload = new Image();
+                preload.decoding = 'async';
+                preload.src = image.src;
+                decodeImage(preload);
+                images.push(preload);
+            });
         });
         preloadedRef.current.set(stackIndex, images);
     }, [stacks]);
@@ -1941,21 +2857,47 @@ const GraffitiGallery = () => {
         if (Number.isInteger(openStack)) preloadStack(openStack);
     }, [openStack, preloadStack]);
 
+    const viewerOpen = viewer != null;
+
     useEffect(() => {
-        if (!isOpen) return undefined;
+        if (!isOpen && !viewerOpen) return undefined;
         const { body } = document;
         const previousOverflow = body.style.overflow;
         const previousPadding = body.style.paddingRight;
         const gutter = window.innerWidth - document.documentElement.clientWidth;
         body.style.overflow = 'hidden';
         if (gutter > 0) body.style.paddingRight = `${gutter}px`;
-        const node = closeRef.current || overlayRef.current;
-        if (node) node.focus();
+        if (isOpen) {
+            const node = closeRef.current || overlayRef.current;
+            if (node) node.focus();
+        }
         return () => {
             body.style.overflow = previousOverflow;
             body.style.paddingRight = previousPadding;
         };
-    }, [isOpen]);
+    }, [isOpen, viewerOpen]);
+
+    const openViewer = (stackIndex, itemIndex, imgBox, stageBox, wasOpen) => {
+        const stack = stacks[stackIndex];
+        if (isOpen || viewerOpen || !stack?.items[itemIndex]) return;
+        preloadStack(stackIndex);
+        setViewer({ stackIndex, index: itemIndex, from: stageBox, wasOpen: Boolean(wasOpen) });
+    };
+
+    const viewerRestRect = () => {
+        if (!viewer) return null;
+        const stage = buttonsRef.current[viewer.stackIndex]?.querySelector('.design-file-stage');
+        const rect = stage?.getBoundingClientRect();
+        return rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
+    };
+
+    const onViewerClosed = (restoreFocus = false) => {
+        const button = viewer ? buttonsRef.current[viewer.stackIndex] : null;
+        setViewer(null);
+        if (restoreFocus && button) {
+            window.requestAnimationFrame(() => button.focus({ preventScroll: true }));
+        }
+    };
 
     useEffect(() => {
         if (!isOpen) return undefined;
@@ -2117,7 +3059,7 @@ const GraffitiGallery = () => {
                 </filter>
             </svg>
 
-            <div className="design-stacks">
+            <div className={`design-stacks${gridHold ? ' is-holding' : ''}`}>
                 <div className="design-stacks-grid">
                     {stacks.map((stack, stackIndex) => (
                         <CaseFile
@@ -2128,18 +3070,34 @@ const GraffitiGallery = () => {
                                 'design-stack',
                                 isOpen && stackIndex !== openStack ? 'is-background' : '',
                                 isOpen && stackIndex === openStack && !restoreFolder ? 'is-source-open' : '',
+                                viewerOpen && viewer.stackIndex !== stackIndex ? 'is-background' : '',
+                                viewerOpen && viewer.stackIndex === stackIndex ? 'is-source-open' : '',
                             ].filter(Boolean).join(' ')}
-                            inert={isOpen && !restoreFolder}
+                            inert={(isOpen && !restoreFolder) || viewerOpen}
                             showPage={restoreFolder && stackIndex === openStack ? detailIndex : null}
                             setButton={(node) => {
                                 buttonsRef.current[stackIndex] = node;
                             }}
-                            onOpenDetail={openFromFolder}
+                            onOpenDetail={LEGACY_OVERLAY ? openFromFolder : openViewer}
                             onOpenFile={preloadStack}
+                            onStampBaked={onStampBaked}
                         />
                     ))}
                 </div>
             </div>
+
+            {viewer ? (
+                <FolderViewer
+                    stack={stacks[viewer.stackIndex]}
+                    stackIndex={viewer.stackIndex}
+                    startIndex={viewer.index}
+                    from={viewer.from}
+                    wasOpen={viewer.wasOpen}
+                    reduced={motion.reduced}
+                    getRestRect={viewerRestRect}
+                    onClosed={onViewerClosed}
+                />
+            ) : null}
 
             {openDetail ? (
                 <div

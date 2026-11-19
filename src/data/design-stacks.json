@@ -24,6 +24,13 @@
     ]
   },
   {
+    "title": "Billboard Design",
+    "cardShape": "natural",
+    "items": [
+      { "type": "image", "src": "/Product-design/Graphic-Design3.png", "title": "GOYA Puerto Rico", "date": "", "description": "Commissioned by GOYA Puerto Rico through Billboard Media Group. I developed the design over several rounds of revisions with the client until it was approved, and the final billboard ran for two years.\n\nA second design from the same commission was printed as a large-format vinyl billboard. I also helped raise and secure it in place, seeing the project through from screen to street.", "width": 1363, "height": 337, "images": [{"src":"/Product-design/Graphic-Design3.png","width":1363,"height":337},{"src":"/Product-design/Graphic-Design4.png","width":1108,"height":274}] }
+    ]
+  },
+  {
     "title": "Other",
     "cardShape": "natural",
     "frame": "thin-white",
@@ -31,14 +38,6 @@
       { "type": "image", "src": "/Product-design/MTPro1.png", "title": "Mesh Enclosure", "date": "", "description": "Blueprints for extruded-aluminum structures, created with Sidex Suministros while I trained on MTPro, the company's design software. Working with their actual product stock taught me how a design becomes a buildable, sellable assembly. These were training exercises and were likely never built.", "width": 1174, "height": 1024 },
       { "type": "image", "src": "/Product-design/MTPro2.png", "title": "Shelving Frame", "date": "", "description": "Blueprints for extruded-aluminum structures, created with Sidex Suministros while I trained on MTPro, the company's design software. Working with their actual product stock taught me how a design becomes a buildable, sellable assembly. These were training exercises and were likely never built.", "width": 1056, "height": 986 },
       { "type": "image", "src": "/Product-design/MTPro3.png", "title": "Utility Cart", "date": "", "description": "Blueprints for extruded-aluminum structures, created with Sidex Suministros while I trained on MTPro, the company's design software. Working with their actual product stock taught me how a design becomes a buildable, sellable assembly. These were training exercises and were likely never built.", "width": 1093, "height": 941 }
-    ]
-  },
-  {
-    "title": "Billboard Design",
-    "cardShape": "natural",
-    "items": [
-      { "type": "image", "src": "/Product-design/Graphic-Design3.png", "title": "GOYA Puerto Rico I", "date": "", "description": "Commissioned by GOYA Puerto Rico through Billboard Media Group. I developed the design over several rounds of revisions with the client until it was approved, and the final billboard ran for two years.", "width": 1363, "height": 337 },
-      { "type": "image", "src": "/Product-design/Graphic-Design4.png", "title": "GOYA Puerto Rico II", "date": "", "description": "A second design from the same commission, printed as a large-format vinyl billboard. I also helped raise and secure it in place, seeing the project through from screen to street.", "width": 1108, "height": 274 }
     ]
   }
 ]

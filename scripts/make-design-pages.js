@@ -21,11 +21,16 @@ function listSources() {
   const sources = new Set();
   stacks.forEach((stack) => {
     stack.items.forEach((item) => {
-      if (item.type !== 'image' || !item.src) return;
-      if (!item.src.startsWith('/Product-design/')) {
-        throw new Error(`Design image outside /Product-design/: ${item.src}`);
-      }
-      sources.add(item.src);
+      const listed = Array.isArray(item.images) && item.images.length
+        ? item.images.map((image) => image.src)
+        : [item.src];
+      listed.forEach((src) => {
+        if (item.type !== 'image' || !src) return;
+        if (!src.startsWith('/Product-design/')) {
+          throw new Error(`Design image outside /Product-design/: ${src}`);
+        }
+        sources.add(src);
+      });
     });
   });
   return [...sources];
