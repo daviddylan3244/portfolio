@@ -21,6 +21,8 @@
     "start": "react-scripts start",
     "sync:design": "node scripts/sync-design-text.js",
     "backdrop:photos": "node scripts/make-backdrop-photos.js",
+    "design:pages": "node scripts/make-design-pages.js",
+    "file:textures": "node scripts/make-file-textures.js",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"

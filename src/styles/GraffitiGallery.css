@@ -1,22 +1,44 @@
 .design-page {
-    --stack-pad: 0.35rem;
-    --stack-title: 1.35rem;
-    /* Air between the top titles and the bottom cards. */
-    --stack-gap-y: clamp(1.5rem, 4vh, 2.5rem);
-    --stack-gap-x: max(120px, 17.6vw);
     /* Header min-height is 1.5rem * 2 + 46px. */
     --stacks-header: 6.25rem;
     --stacks-pad-y: 1.2rem;
     --stacks-pad-x: 2.5rem;
-    /* 2.18 = two rows of (card + 9% title/twist gap). */
-    --card-size: clamp(
-        120px,
+    /*
+     * Height: two rows of (tab + 1.29w file) plus a 0.3w row gap = 3.1w.
+     * Width: an open file spreads 0.5w past its slot on each side, so two
+     * slots, a 1.2w column gap, and both outer half-spreads need 4.2w.
+     */
+    --file-w: clamp(
+        110px,
         min(
-            calc((100dvh - var(--stacks-header) - var(--stacks-pad-y) - var(--stack-gap-y) - 2 * var(--stack-title) - 4 * var(--stack-pad)) / 2.18),
-            calc((100vw - var(--stacks-pad-x) - var(--stack-gap-x) - 4 * var(--stack-pad)) / 2)
+            calc((100dvh - var(--stacks-header) - 2 * var(--stacks-pad-y)) / 3.1),
+            calc((100vw - var(--stacks-pad-x) - 1rem) / 4.4)
         ),
-        480px
+        300px
     );
+    --file-h: calc(var(--file-w) * 1.29);
+    --file-col-gap: calc(var(--file-w) * 1.2);
+    --file-row-gap: calc(var(--file-w) * 0.3);
+    --file-manila: #d5b479;
+    --file-manila-shade: #ba975a;
+    --file-manila-inside: #e2c793;
+    --file-manila-edge: rgba(92, 62, 24, 0.3);
+    --file-paper: #f4eee0;
+    --file-paper-shade: #e7ddc8;
+    --file-print: #ffffff;
+    --file-ink: #2b2219;
+    --file-ink-soft: rgba(43, 34, 25, 0.62);
+    --file-stamp: #b2281f;
+    --file-clip: #8e9093;
+    --file-shadow: rgba(0, 0, 0, 0.45);
+    --file-font-type: "Special Elite", "Courier New", monospace;
+    --file-font-body: "Courier Prime", "Courier New", monospace;
+    --file-font-stamp: "Black Ops One", Impact, "Arial Black", sans-serif;
+    --file-turn: 0.75s;
+    --file-open: 0.7s;
+    --file-ease: cubic-bezier(0.45, 0.05, 0.2, 1);
+    --file-grain: url("../assets/file-grain.png");
+    --file-grain-light: url("../assets/file-grain-light.png");
     min-height: 100vh;
     min-height: 100dvh;
     display: flex;
@@ -44,81 +66,387 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    padding: 0.35rem 1.25rem 0.85rem;
+    padding: var(--stacks-pad-y) 1.25rem;
     box-sizing: border-box;
     overflow: visible;
 }
 
 .design-stacks-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, var(--file-w));
     justify-items: center;
     align-items: start;
-    column-gap: var(--stack-gap-x);
-    row-gap: var(--stack-gap-y);
+    column-gap: var(--file-col-gap);
+    row-gap: var(--file-row-gap);
     width: auto;
+}
+
+.design-file-defs {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
 }
 
 .design-stack {
     appearance: none;
     -webkit-appearance: none;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0;
+    display: block;
+    width: var(--file-w);
     margin: 0;
-    padding: var(--stack-pad);
+    padding: 0;
     border: 0;
     background: none;
     color: inherit;
     font: inherit;
+    text-align: left;
     cursor: pointer;
     outline: none;
     overflow: visible;
     box-shadow: none;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .design-stack:focus-visible {
     outline: none;
 }
 
-.design-stack:focus-visible .design-stack-title {
-    color: white;
-}
-
-.design-stack-cards {
+.design-file {
+    --w: var(--file-w);
+    --h: var(--file-h);
     position: relative;
-    z-index: 0;
-    width: var(--card-size);
-    height: var(--card-size);
-    margin-bottom: calc(var(--card-size) * 0.09);
-    overflow: visible;
+    z-index: 1;
+    display: block;
+    padding-top: calc(var(--h) * 0.08);
 }
 
-.stack-card {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: calc(var(--card-size) * var(--fit-w, 1));
-    height: calc(var(--card-size) * var(--fit-h, 1));
-    box-sizing: border-box;
-    border-radius: 1px;
-    overflow: hidden;
-    background: transparent;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16), 0 3px 8px rgba(0, 0, 0, 0.1);
-    transform-origin: 50% 50%;
-    transition: transform var(--card-ms, 300ms) cubic-bezier(0.22, 1, 0.36, 1);
+.design-file.is-open {
+    z-index: 5;
+}
+
+.design-stack:focus-visible .design-file-stage {
+    outline: 2px dashed rgba(242, 236, 226, 0.62);
+    outline-offset: 14px;
+}
+
+.design-file-stage {
+    position: relative;
+    display: block;
+    width: var(--w);
+    height: var(--h);
+    isolation: isolate;
+    transition: transform var(--file-open) var(--file-ease);
+}
+
+.design-file.is-open .design-file-stage {
+    transform: translateX(calc(var(--w) * 0.5));
+}
+
+.design-stack:hover .design-file-stage,
+.design-stack:hover .design-file-cover,
+.design-stack:hover .design-file-page,
+.design-file.is-open .design-file-stage,
+.design-file.is-open .design-file-cover,
+.design-file.is-open .design-file-page,
+.design-file.is-closing .design-file-stage,
+.design-file.is-closing .design-file-cover,
+.design-file.is-closing .design-file-page {
     will-change: transform;
+}
+
+.design-file.is-closing .design-file-page {
+    transition-duration: var(--file-open), 0.25s;
+    transition-timing-function: var(--file-ease), linear;
+}
+
+.design-file-back {
+    position: absolute;
+    inset: 0;
+    display: block;
+    border-radius: 3px 6px 6px 3px;
+    background-color: var(--file-manila-shade);
+    background-image: var(--file-grain);
+    box-shadow:
+        0 22px 34px var(--file-shadow),
+        0 2px 4px var(--file-shadow),
+        inset 0 0 0 1px var(--file-manila-edge);
+}
+
+.design-file-back::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 7px;
+    background: linear-gradient(90deg, var(--file-manila-edge), transparent);
+}
+
+.design-file-tab {
+    position: absolute;
+    bottom: calc(100% - 1px);
+    right: 9%;
+    width: 42%;
+    height: calc(var(--h) * 0.075);
+    display: grid;
+    place-items: center;
+    background-color: var(--file-manila-shade);
+    background-image: var(--file-grain);
+    clip-path: polygon(9% 0, 91% 0, 100% 100%, 0 100%);
+    border-radius: 5px 5px 0 0;
+}
+
+.design-file-tab-label {
+    display: block;
+    padding: 0.32em 0.6em 0.24em;
+    background: var(--file-paper);
+    color: var(--file-ink);
+    font: max(8px, calc(var(--w) * 0.04))/1 var(--file-font-type);
+    letter-spacing: 0.1em;
+    white-space: nowrap;
+}
+
+.design-file-pages {
+    position: absolute;
+    top: 2.5%;
+    bottom: 2.5%;
+    left: 0;
+    right: 3%;
+    display: block;
+}
+
+.design-file-page {
+    position: absolute;
+    inset: 0;
+    display: block;
+    transform-origin: left center;
+    transform-style: preserve-3d;
+    transform: perspective(2200px) rotateY(0deg);
+    transition: transform var(--file-turn) var(--file-ease), opacity 0.25s linear;
+}
+
+.design-file-page.is-turned {
+    transform: perspective(2200px) rotateY(-180deg);
+}
+
+.design-file-page.is-fading {
+    opacity: 0;
+}
+
+.design-file-face {
+    position: absolute;
+    inset: 0;
+    display: block;
+    overflow: hidden;
+    border-radius: 2px;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+}
+
+.design-file-page .design-file-face.is-front {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto auto;
+    padding: 17% 10% 9%;
+    box-sizing: border-box;
+    background-color: var(--file-paper);
+    background-image: var(--file-grain-light);
+    box-shadow: 1px 1px 0 var(--file-manila-edge), 2px 4px 10px var(--file-shadow);
+}
+
+.design-file-page .design-file-face.is-front::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, var(--file-shadow), transparent 55%);
+    opacity: 0;
+    transition: opacity 0.35s linear;
     pointer-events: none;
 }
 
-.stack-card.is-square {
-    background: #fff;
+.design-file-page.is-turning .design-file-face.is-front::after {
+    opacity: 0.6;
 }
 
-.stack-card.is-framed {
-    background: #fff;
-    padding: max(4px, calc(var(--card-size) * 0.03));
+.design-file-page .design-file-face.is-reverse {
+    transform: rotateY(180deg);
+    background-color: var(--file-paper-shade);
+    background-image: var(--file-grain-light);
+    box-shadow: -1px 1px 0 var(--file-manila-edge), -2px 4px 10px var(--file-shadow);
+}
+
+.design-file-clip {
+    position: absolute;
+    top: 3.5%;
+    left: 15%;
+    z-index: 2;
+    width: 6.5%;
+    height: auto;
+    transform: rotate(-4deg);
+}
+
+.design-file-clip path {
+    fill: none;
+    stroke: var(--file-clip);
+    stroke-width: 2.4;
+    stroke-linecap: round;
+}
+
+.design-file-mount {
+    position: relative;
+    display: block;
+    min-height: 0;
+    margin-bottom: 9%;
+}
+
+.design-file-mount img {
+    position: absolute;
+    inset: 0;
+    display: block;
+    margin: auto;
+    box-sizing: border-box;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+    padding: 3.5%;
+    background: var(--file-print);
+    box-shadow: 0 1px 2px var(--file-shadow), 0 6px 14px rgba(0, 0, 0, 0.18);
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.design-file-cap {
+    display: block;
+    margin: 0;
+    font: 700 max(9px, calc(var(--w) * 0.05))/1.25 var(--file-font-body);
+    color: var(--file-ink);
+    text-wrap: balance;
+}
+
+.design-file-meta {
+    display: block;
+    margin: 4px 0 0;
+    font: max(7px, calc(var(--w) * 0.034))/1.2 var(--file-font-type);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--file-ink-soft);
+}
+
+.design-file-cover {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 97%;
+    z-index: 300;
+    display: block;
+    transform-origin: left center;
+    transform-style: preserve-3d;
+    transform: perspective(2200px) rotateY(0deg);
+    transition: transform var(--file-open) var(--file-ease), opacity 0.3s linear;
+}
+
+.design-file.is-open .design-file-cover {
+    transform: perspective(2200px) rotateY(-178deg);
+}
+
+.design-file-cover.is-low {
+    z-index: 150;
+}
+
+.design-file-cover .design-file-face.is-front {
+    display: flex;
+    flex-direction: column;
+    padding: 9%;
+    box-sizing: border-box;
+    border-radius: 3px 6px 6px 3px;
+    background-color: var(--file-manila);
+    background-image:
+        var(--file-grain),
+        radial-gradient(circle at 28% 18%, rgba(255, 244, 214, 0.28), transparent 60%),
+        radial-gradient(circle at 82% 92%, rgba(122, 82, 30, 0.2), transparent 55%);
+    box-shadow:
+        inset 0 0 0 1px var(--file-manila-edge),
+        inset 0 0 calc(var(--w) * 0.08) rgba(122, 82, 30, 0.22),
+        0 1px 3px var(--file-shadow);
+}
+
+.design-file-cover .design-file-face.is-inside {
+    transform: rotateY(180deg);
+    padding: 12% 11%;
+    box-sizing: border-box;
+    border-radius: 6px 3px 3px 6px;
+    background-color: var(--file-manila-inside);
+    background-image: var(--file-grain);
+    box-shadow:
+        inset 0 0 0 1px var(--file-manila-edge),
+        inset 0 0 calc(var(--w) * 0.07) rgba(122, 82, 30, 0.18);
+}
+
+.design-file-typed {
+    display: grid;
+    gap: 0.18em;
+    margin: 0;
+    font: max(8px, calc(var(--w) * 0.044))/1.35 var(--file-font-type);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--file-ink);
+}
+
+.design-file-typed > span {
+    display: block;
+}
+
+.design-file-stamp {
+    display: block;
+    margin: auto;
+    max-width: 88%;
+    padding: 0.34em 0.46em 0.26em;
+    border: max(2px, calc(var(--w) * 0.011)) solid currentColor;
+    outline: max(1px, calc(var(--w) * 0.005)) solid currentColor;
+    outline-offset: max(2px, calc(var(--w) * 0.012));
+    color: var(--file-stamp);
+    font: max(13px, calc(var(--w) * 0.1))/1.02 var(--file-font-stamp);
+    letter-spacing: 0.05em;
+    text-align: center;
+    text-transform: uppercase;
+    text-wrap: balance;
+    opacity: 0.9;
+    transform: rotate(-8deg);
+}
+
+.design-file-stamp.is-baked {
+    width: 88%;
+    max-width: 88%;
+    height: auto;
+    padding: 0;
+    border: 0;
+    outline: none;
+}
+
+.design-file-index {
+    display: grid;
+    gap: 0.35em;
+    margin: 0.8em 0 0;
+    font: max(9px, calc(var(--w) * 0.046))/1.4 var(--file-font-body);
+    color: var(--file-ink);
+}
+
+.design-file-entry {
+    display: grid;
+    grid-template-columns: 1.5em minmax(0, 1fr);
+}
+
+.design-file-entry > span {
+    display: block;
+}
+
+.design-file-entry-views {
+    display: inline;
+    color: var(--file-ink-soft);
+}
+
+.design-file.no-anim,
+.design-file.no-anim * {
+    transition: none !important;
 }
 
 .stack-card-color,
@@ -136,28 +464,13 @@
     opacity: 0;
 }
 
-.stack-card.is-square .stack-card-image {
-    background: #fff;
-}
-
-.stack-card.is-cover .stack-card-image {
-    object-fit: cover;
-}
-
 .stack-card-image.is-ready {
     opacity: 1;
 }
 
-.design-stack-title {
-    position: relative;
-    z-index: 2;
-    font-family: var(--body-copy-font-family);
-    font-size: 1.05rem;
-    font-weight: normal;
-    letter-spacing: var(--body-copy-letter-spacing);
-    color: var(--body-copy-color);
-    text-align: center;
-    line-height: 1.3;
+.stack-card-placeholder {
+    position: absolute;
+    inset: 0;
 }
 
 .design-stack.is-background {
@@ -513,6 +826,7 @@
 }
 
 .stack-grid-card-face {
+    position: relative;
     display: block;
     width: 100%;
     height: 100%;
@@ -558,8 +872,15 @@
 }
 
 .stack-overlay.is-leaving .stack-overlay-head,
-.stack-overlay.is-leaving .stack-overlay-close {
+.stack-overlay.is-leaving .stack-overlay-close,
+.stack-overlay.is-leaving .stack-detail-copy.is-on,
+.stack-overlay.is-leaving .stack-detail-rail-wrap {
     opacity: 0;
+}
+
+.stack-overlay.is-leaving .stack-detail-copy.is-on,
+.stack-overlay.is-leaving .stack-detail-rail-wrap {
+    transition: opacity 450ms linear;
 }
 
 .stack-grid-card.is-pile .stack-grid-card-face {
@@ -568,20 +889,21 @@
 
 @media (max-width: 640px) {
     .design-stacks {
-        overflow: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
         align-items: flex-start;
         padding: 1.5rem 1rem 4rem;
     }
 
     .design-stacks-grid {
         grid-template-columns: 1fr;
-        row-gap: 3.25rem;
         width: min(920px, 100%);
     }
 
+    /* The open spread is 2w wide, centered on the slot: 80vw at most. */
     .design-page {
-        --card-size: min(72vw, 280px);
-        --stack-gap-x: 0px;
+        --file-w: min(40vw, 200px);
+        --file-row-gap: calc(var(--file-w) * 0.45);
     }
 }
 
@@ -596,7 +918,34 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .stack-card,
+    .design-file-stage {
+        transition: none;
+    }
+
+    .design-file.is-open .design-file-stage {
+        transform: none;
+    }
+
+    .design-file-cover {
+        transition: opacity 0.3s linear;
+    }
+
+    .design-file.is-open .design-file-cover {
+        transform: perspective(2200px) rotateY(0deg);
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .design-file-page {
+        transition: opacity 0.3s linear;
+    }
+
+    .design-file-page.is-turned {
+        transform: perspective(2200px) rotateY(0deg);
+        opacity: 0;
+        pointer-events: none;
+    }
+
     .stack-overlay-head,
     .stack-overlay-close,
     .stack-grid-card.is-hot .stack-grid-card-face {

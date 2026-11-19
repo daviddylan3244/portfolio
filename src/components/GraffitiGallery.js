@@ -7,14 +7,9 @@ import '../styles/GraffitiGallery.css';
 import designStacks from '../data/design-stacks.json';
 import { createTextReveal, setDescriptionText } from '../utils/textReveal';
 
-const CAROUSEL_INTERVAL_MS = 1000;
-const SWAP_MS = 450;
-const FAN_MS = 300;
 const CLOSE_MS = 450;
 const CHROME_FADE_MS = 180;
 const OPEN_STAGGER_MS = 40;
-const TWIST_STEP_DEG = 3.5;
-const TWIST_MAX_DEG = 25;
 const DETAIL_MS = 450;
 const DETAIL_BUSY_MARGIN_MS = 120;
 const DETAIL_EASE = [0.22, 1, 0.36, 1];
@@ -22,18 +17,20 @@ const DETAIL_NARROW_PX = 819;
 const DETAIL_LOREM =
     'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.';
 
-const poseFor = (depth, fanned) => {
-    if (!fanned) return { x: 0, y: 0, r: 0 };
-    return {
-        x: 0,
-        y: 0,
-        r: Math.min(TWIST_MAX_DEG, depth * TWIST_STEP_DEG),
-    };
-};
+const FILE_TURN_MS = 750;
+const FILE_OPEN_MS = 700;
+const FILE_FIRST_TURN_MS = 1500;
+const FILE_EVERY_MS = 1600;
+const FILE_BACK_GAP_MS = 110;
+const FILE_LOOP_PAUSE_MS = 700;
+const FILE_REST_FILL = 0.8;
 
-const identityOrder = (stack) => stack.items.map((_, index) => index);
+const fileNumber = (index) => String(index + 1).padStart(3, '0');
 
-const advanceOrder = (order) => [...order.slice(1), order[0]];
+// Keep in sync with pageSrc in scripts/make-design-pages.js.
+const pageSrc = (src) => String(src)
+    .replace(/^\/Product-design\//, '/Product-design/pages/')
+    .replace(/\.[^./]+$/, '.jpg');
 
 const aspectOf = (item) => {
     const width = Number(item?.width);
@@ -479,7 +476,7 @@ function decodeImage(node) {
     return Promise.resolve();
 }
 
-function DecodedImage({ src, alt, loading, fetchPriority }) {
+function DecodedImage({ src, alt, loading, fetchPriority, placeholder, hold = false }) {
     const [ready, setReady] = useState(false);
     const nodeRef = useRef(null);
 
@@ -495,23 +492,38 @@ function DecodedImage({ src, alt, loading, fetchPriority }) {
         }
     }, [src, reveal]);
 
+    const shown = ready && !(hold && placeholder);
+
     return (
-        <img
-            ref={nodeRef}
-            className={`stack-card-image${ready ? ' is-ready' : ''}`}
-            src={src}
-            alt={alt}
-            draggable={false}
-            loading={loading}
-            decoding="async"
-            fetchPriority={fetchPriority}
-            onLoad={(event) => reveal(event.currentTarget)}
-            onError={() => setReady(true)}
-        />
+        <>
+            {placeholder && !shown ? (
+                <img
+                    className="stack-card-image stack-card-placeholder is-ready"
+                    src={placeholder}
+                    alt=""
+                    aria-hidden="true"
+                    draggable={false}
+                    decoding="sync"
+                />
+            ) : null}
+            <img
+                ref={nodeRef}
+                className={`stack-card-image${shown ? ' is-ready' : ''}`}
+                style={hold && placeholder ? { visibility: 'hidden' } : undefined}
+                src={src}
+                alt={alt}
+                draggable={false}
+                loading={loading}
+                decoding="async"
+                fetchPriority={fetchPriority}
+                onLoad={(event) => reveal(event.currentTarget)}
+                onError={() => setReady(true)}
+            />
+        </>
     );
 }
 
-function StackCardFace({ item, index, title, loading = 'lazy', fetchPriority = 'low' }) {
+function StackCardFace({ item, index, title, loading = 'lazy', fetchPriority = 'low', placeholder, hold }) {
     if (item.type === 'image' && item.src) {
         return (
             <DecodedImage
@@ -519,6 +531,8 @@ function StackCardFace({ item, index, title, loading = 'lazy', fetchPriority = '
                 alt={item.title || `${title} ${index + 1}`}
                 loading={loading}
                 fetchPriority={fetchPriority}
+                placeholder={placeholder}
+                hold={hold}
             />
         );
     }
@@ -530,17 +544,621 @@ function StackCardFace({ item, index, title, loading = 'lazy', fetchPriority = '
     );
 }
 
+const contentsOf = (items) => {
+    const counts = new Map();
+    items.forEach((item) => {
+        const { title } = itemCopy(item);
+        counts.set(title, (counts.get(title) || 0) + 1);
+    });
+    return [...counts];
+};
+
+function PaperClip() {
+    return (
+        <svg className="design-file-clip" viewBox="0 0 22 56" aria-hidden="true" focusable="false">
+            <path d="M7 40V9a4.5 4.5 0 0 1 9 0v34a7.5 7.5 0 0 1-15 0V14" />
+        </svg>
+    );
+}
+
+const contentBox = (img) => {
+    const rect = img?.getBoundingClientRect();
+    if (!rect || rect.width < 1 || rect.height < 1) return null;
+    const style = getComputedStyle(img);
+    const left = parseFloat(style.paddingLeft) || 0;
+    const right = parseFloat(style.paddingRight) || 0;
+    const top = parseFloat(style.paddingTop) || 0;
+    const bottom = parseFloat(style.paddingBottom) || 0;
+    return {
+        left: rect.left + left,
+        top: rect.top + top,
+        width: Math.max(1, rect.width - left - right),
+        height: Math.max(1, rect.height - top - bottom),
+    };
+};
+
+function bakeStamp(text, width) {
+    const fontSize = Math.max(13, width * 0.1);
+    const padX = fontSize * 0.46;
+    const padTop = fontSize * 0.34;
+    const padBottom = fontSize * 0.26;
+    const border = Math.max(2, width * 0.011);
+    const outline = Math.max(1, width * 0.005);
+    const outlineOffset = Math.max(2, width * 0.012);
+    const innerW = Math.max(40, width - padX * 2 - border * 2 - (outline + outlineOffset) * 2);
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `${fontSize}px "Black Ops One"`;
+    probe.letterSpacing = `${fontSize * 0.05}px`;
+    const words = String(text).toUpperCase().split(/\s+/).filter(Boolean);
+    const lines = [];
+    let current = '';
+    words.forEach((word) => {
+        const next = current ? `${current} ${word}` : word;
+        if (current && probe.measureText(next).width > innerW) {
+            lines.push(current);
+            current = word;
+        } else {
+            current = next;
+        }
+    });
+    if (current) lines.push(current);
+    const lineH = fontSize * 1.02;
+    const textH = Math.max(lineH, lines.length * lineH);
+    const boxW = width;
+    const boxH = padTop + textH + padBottom + border * 2 + (outline + outlineOffset) * 2;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(boxW * dpr));
+    canvas.height = Math.max(1, Math.ceil(boxH * dpr));
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.font = `${fontSize}px "Black Ops One"`;
+    ctx.letterSpacing = `${fontSize * 0.05}px`;
+    ctx.fillStyle = '#b2281f';
+    ctx.strokeStyle = '#b2281f';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = outline;
+    ctx.strokeRect(outline / 2, outline / 2, boxW - outline, boxH - outline);
+    ctx.lineWidth = border;
+    const edge = outline + outlineOffset + border / 2;
+    ctx.strokeRect(edge, edge, boxW - edge * 2, boxH - edge * 2);
+    lines.forEach((line, index) => {
+        const y = outline + outlineOffset + border + padTop + lineH * (index + 0.5);
+        ctx.fillText(line, boxW / 2, y);
+    });
+    const baked = document.createElement('canvas');
+    baked.width = canvas.width;
+    baked.height = canvas.height;
+    const out = baked.getContext('2d');
+    try {
+        out.filter = 'url(#design-stamp-ink)';
+        out.drawImage(canvas, 0, 0);
+        if (out.filter !== 'none') return baked.toDataURL('image/png');
+    } catch (err) {
+        // The live filter could not be applied; the plain drawing is still one bitmap.
+    }
+    return canvas.toDataURL('image/png');
+}
+
+function BakedStamp({ text, measureWidth, moving }) {
+    const [src, setSrc] = useState('');
+    const movingRef = useRef(moving);
+    movingRef.current = moving;
+
+    const bake = useCallback(() => {
+        if (movingRef.current) return false;
+        const width = measureWidth();
+        if (!(width > 0) || !document.fonts.check('16px "Black Ops One"')) return false;
+        setSrc(bakeStamp(text, width));
+        return true;
+    }, [measureWidth, text]);
+
+    useLayoutEffect(() => {
+        if (bake()) return undefined;
+        let cancelled = false;
+        document.fonts.ready.then(() => {
+            if (!cancelled) bake();
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [bake]);
+
+    useEffect(() => {
+        if (moving) return undefined;
+        const onResize = () => bake();
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, [bake, moving]);
+
+    if (!src) return <span className="design-file-stamp">{text}</span>;
+    return (
+        <img
+            className="design-file-stamp is-baked"
+            src={src}
+            alt=""
+            draggable={false}
+        />
+    );
+}
+
+function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, onOpenDetail, onOpenFile }) {
+    const fileRef = useRef(null);
+    const coverRef = useRef(null);
+    const pageRefs = useRef([]);
+    const stateRef = useRef({
+        open: false,
+        turned: 0,
+        timers: [],
+        auto: 0,
+        manual: false,
+        flipping: false,
+        pointer: 'mouse',
+    });
+    const propsRef = useRef({});
+    propsRef.current = { inert, onOpenDetail, onOpenFile };
+    const showPageRef = useRef(showPage);
+    showPageRef.current = showPage;
+    const count = stack.items.length;
+    const number = fileNumber(stackIndex);
+
+    const pages = () => pageRefs.current.slice(0, count).filter(Boolean);
+
+    const later = (ms, fn) => {
+        const state = stateRef.current;
+        const id = window.setTimeout(() => {
+            state.timers = state.timers.filter((timer) => timer !== id);
+            fn();
+        }, ms);
+        state.timers.push(id);
+    };
+
+    const clearAuto = () => {
+        const state = stateRef.current;
+        window.clearTimeout(state.auto);
+        state.auto = 0;
+    };
+
+    const clearTimers = () => {
+        const state = stateRef.current;
+        state.timers.forEach((timer) => window.clearTimeout(timer));
+        state.timers = [];
+        state.flipping = false;
+        clearAuto();
+    };
+
+    const pageIsMoving = (page) => {
+        const transition = getComputedStyle(page).transitionProperty;
+        if (!transition || transition === 'none') return false;
+        const running = getComputedStyle(page);
+        return running.transitionDuration !== '0s'
+            && (page.classList.contains('is-turned')
+                || page.classList.contains('is-turning')
+                || page.classList.contains('is-fading'));
+    };
+
+    const resetPages = () => {
+        const file = fileRef.current;
+        if (!file) return;
+        if (pages().some(pageIsMoving)) return;
+        file.classList.add('no-anim');
+        pages().forEach((page, index) => {
+            page.classList.remove('is-turned', 'is-turning', 'is-fading');
+            page.style.zIndex = String(100 - index);
+        });
+        stateRef.current.turned = 0;
+        void file.offsetWidth;
+        file.classList.remove('no-anim');
+    };
+
+    const turnForward = () => {
+        const state = stateRef.current;
+        const list = pages();
+        if (state.turned >= list.length - 1) return;
+        const page = list[state.turned];
+        page.style.zIndex = String(200 + state.turned);
+        page.classList.add('is-turned', 'is-turning');
+        later(FILE_TURN_MS * 0.6, () => page.classList.remove('is-turning'));
+        state.turned += 1;
+    };
+
+    const turnBack = () => {
+        const state = stateRef.current;
+        if (state.turned === 0) return;
+        state.turned -= 1;
+        const index = state.turned;
+        const page = pages()[index];
+        page.classList.remove('is-turned');
+        later(FILE_TURN_MS, () => {
+            page.style.zIndex = String(100 - index);
+        });
+    };
+
+    const flipAllBack = (done) => {
+        const state = stateRef.current;
+        const list = pages();
+        const turned = state.turned;
+        state.flipping = true;
+        for (let k = turned - 1, step = 0; k >= 0; k -= 1, step += 1) {
+            const index = k;
+            const page = list[index];
+            later(step * FILE_BACK_GAP_MS, () => {
+                page.classList.remove('is-turned');
+                later(FILE_TURN_MS, () => {
+                    page.style.zIndex = String(100 - index);
+                });
+            });
+        }
+        state.turned = 0;
+        later(Math.max(0, turned - 1) * FILE_BACK_GAP_MS + FILE_TURN_MS + 20, () => {
+            state.flipping = false;
+            done?.();
+        });
+    };
+
+    const scheduleTick = (ms) => {
+        const state = stateRef.current;
+        clearAuto();
+        state.auto = window.setTimeout(() => {
+            state.auto = 0;
+            tick();
+        }, ms);
+    };
+
+    function tick() {
+        const state = stateRef.current;
+        if (!state.open || state.manual) return;
+        if (state.turned < pages().length - 1) {
+            turnForward();
+            scheduleTick(FILE_EVERY_MS);
+            return;
+        }
+        flipAllBack(() => scheduleTick(FILE_LOOP_PAUSE_MS));
+    }
+
+    const openFile = () => {
+        const state = stateRef.current;
+        if (propsRef.current.inert || Number.isInteger(showPageRef.current)) return;
+        const file = fileRef.current;
+        if (state.closing) {
+            clearTimers();
+            state.closing = false;
+            state.open = true;
+            state.manual = false;
+            file?.classList.remove('is-closing');
+            file?.classList.add('is-open');
+            const restored = state.turnedAtClose || 0;
+            pages().forEach((page, index) => {
+                page.classList.remove('is-turning', 'is-fading');
+                if (index < restored) {
+                    page.style.zIndex = String(200 + index);
+                    page.classList.add('is-turned');
+                }
+            });
+            state.turned = restored;
+            later(FILE_OPEN_MS * 0.55, () => coverRef.current?.classList.add('is-low'));
+            if (count > 1) scheduleTick(restored > 0 ? FILE_EVERY_MS : FILE_FIRST_TURN_MS);
+            propsRef.current.onOpenFile?.(stackIndex);
+            return;
+        }
+        if (state.open) return;
+        clearTimers();
+        state.open = true;
+        state.manual = false;
+        file?.classList.remove('is-closing');
+        file?.classList.add('is-open');
+        later(FILE_OPEN_MS * 0.55, () => coverRef.current?.classList.add('is-low'));
+        if (count > 1) scheduleTick(FILE_FIRST_TURN_MS);
+        propsRef.current.onOpenFile?.(stackIndex);
+    };
+
+    const settleClosed = () => {
+        const state = stateRef.current;
+        if (state.open || !state.closing) return;
+        pages().forEach((page, index) => {
+            page.classList.remove('is-turning', 'is-fading');
+            page.style.zIndex = String(100 - index);
+        });
+        state.turned = 0;
+        state.turnedAtClose = 0;
+        state.closing = false;
+        fileRef.current?.classList.remove('is-closing');
+    };
+
+    const closeFile = () => {
+        const state = stateRef.current;
+        if (!state.open || Number.isInteger(showPageRef.current)) return;
+        clearTimers();
+        state.open = false;
+        state.closing = true;
+        state.turnedAtClose = state.turned;
+        const file = fileRef.current;
+        pages().forEach((page) => {
+            page.classList.remove('is-turning', 'is-fading');
+            if (page.classList.contains('is-turned')) page.classList.remove('is-turned');
+        });
+        coverRef.current?.classList.remove('is-low');
+        file?.classList.add('is-closing');
+        file?.classList.remove('is-open');
+        later(FILE_OPEN_MS + 40, settleClosed);
+    };
+
+    const closeNow = () => {
+        const file = fileRef.current;
+        clearTimers();
+        const state = stateRef.current;
+        state.open = false;
+        state.closing = false;
+        state.turnedAtClose = 0;
+        if (!file) return;
+        file.classList.add('no-anim');
+        file.classList.remove('is-open', 'is-closing');
+        coverRef.current?.classList.remove('is-low');
+        pages().forEach((page, index) => {
+            page.classList.remove('is-turned', 'is-turning', 'is-fading');
+            page.style.zIndex = String(100 - index);
+        });
+        state.turned = 0;
+        void file.offsetWidth;
+        file.classList.remove('no-anim');
+    };
+
+    const snapOpenAt = (index) => {
+        const file = fileRef.current;
+        if (!file) return;
+        clearTimers();
+        file.classList.add('no-anim');
+        file.classList.remove('is-closing');
+        file.classList.add('is-open');
+        coverRef.current?.classList.add('is-low');
+        pages().forEach((page, pageIndex) => {
+            page.classList.remove('is-turning', 'is-fading');
+            if (pageIndex < index) {
+                page.classList.add('is-turned');
+                page.style.zIndex = String(200 + pageIndex);
+            } else {
+                page.classList.remove('is-turned');
+                page.style.zIndex = String(100 - pageIndex);
+            }
+        });
+        const state = stateRef.current;
+        state.open = true;
+        state.closing = false;
+        state.manual = true;
+        state.turned = index;
+        state.turnedAtClose = index;
+        void file.offsetWidth;
+        file.classList.remove('no-anim');
+    };
+
+    const currentIndex = () => Math.min(stateRef.current.turned, Math.max(0, count - 1));
+
+    const openDetail = (index) => {
+        const img = pages()[index]?.querySelector('.design-file-mount img');
+        propsRef.current.onOpenDetail?.(stackIndex, index, contentBox(img));
+        closeNow();
+    };
+
+    const actionsRef = useRef(null);
+    actionsRef.current = { resetPages, clearTimers, closeNow, snapOpenAt, closeFile };
+
+    useLayoutEffect(() => {
+        const actions = actionsRef.current;
+        actions.resetPages();
+        return () => actions.clearTimers();
+    }, []);
+
+    useEffect(() => {
+        if (inert) actionsRef.current.closeNow();
+    }, [inert]);
+
+    const posedRef = useRef(false);
+    useLayoutEffect(() => {
+        const actions = actionsRef.current;
+        if (Number.isInteger(showPage)) {
+            actions.snapOpenAt(showPage);
+            posedRef.current = true;
+            return;
+        }
+        if (!posedRef.current) return;
+        posedRef.current = false;
+        const button = fileRef.current?.closest('button');
+        const hovered = stateRef.current.pointer !== 'touch' && button?.matches(':hover');
+        const focused = document.activeElement === button && isKeyboardFocus(button);
+        if (!hovered && !focused) actions.closeFile();
+    }, [showPage]);
+
+    const measureStampWidth = useCallback(() => {
+        if (stateRef.current.open || stateRef.current.closing) return 0;
+        const face = fileRef.current?.querySelector('.design-file-cover .design-file-face.is-front');
+        if (!face) return 0;
+        const style = getComputedStyle(face);
+        const contentW = face.clientWidth
+            - (parseFloat(style.paddingLeft) || 0)
+            - (parseFloat(style.paddingRight) || 0);
+        return contentW * 0.88;
+    }, []);
+
+    const onPointerDown = (event) => {
+        stateRef.current.pointer = event.pointerType || 'mouse';
+    };
+
+    const onPointerEnter = (event) => {
+        if (event.pointerType === 'touch') return;
+        openFile();
+    };
+
+    const onPointerLeave = (event) => {
+        if (event.pointerType === 'touch' || propsRef.current.inert) return;
+        const button = event.currentTarget;
+        if (document.activeElement === button && isKeyboardFocus(button)) return;
+        closeFile();
+    };
+
+    const onFocus = (event) => {
+        if (!isKeyboardFocus(event.currentTarget)) return;
+        openFile();
+    };
+
+    const onBlur = (event) => {
+        if (propsRef.current.inert) return;
+        const hovered = stateRef.current.pointer !== 'touch' && event.currentTarget.matches(':hover');
+        if (!hovered) closeFile();
+    };
+
+    const onKeyDown = (event) => {
+        if (propsRef.current.inert) return;
+        const state = stateRef.current;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            if (!state.open) {
+                openFile();
+                return;
+            }
+            if (state.flipping) return;
+            state.manual = true;
+            clearAuto();
+            if (state.turned < pages().length - 1) turnForward();
+            else flipAllBack();
+        } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (!state.open || state.flipping) return;
+            state.manual = true;
+            clearAuto();
+            turnBack();
+        } else if (event.key === 'Escape') {
+            if (!state.open) return;
+            event.preventDefault();
+            closeFile();
+        }
+    };
+
+    const onClick = (event) => {
+        if (propsRef.current.inert) return;
+        const state = stateRef.current;
+        const fromKeyboard = event.detail === 0;
+        if (!fromKeyboard && state.pointer === 'touch') {
+            if (!state.open) {
+                openFile();
+                return;
+            }
+            const onCover = event.target.closest('.design-file-cover, .design-file-page.is-turned');
+            if (onCover) {
+                closeFile();
+                return;
+            }
+            openDetail(currentIndex());
+            return;
+        }
+        if (fromKeyboard && !state.open) {
+            openFile();
+            return;
+        }
+        openDetail(currentIndex());
+    };
+
+    return (
+        <button
+            type="button"
+            ref={setButton}
+            className={className}
+            aria-label={`${stack.title}, ${count} items`}
+            onPointerDown={onPointerDown}
+            onPointerEnter={onPointerEnter}
+            onPointerLeave={onPointerLeave}
+            onFocus={onFocus}
+            onBlur={onBlur}
+            onKeyDown={onKeyDown}
+            onClick={onClick}
+        >
+            <span className="design-file" ref={fileRef}>
+                <span className="design-file-stage">
+                    <span className="design-file-back">
+                        <span className="design-file-tab">
+                            <span className="design-file-tab-label">FILE {number}</span>
+                        </span>
+                    </span>
+                    <span className="design-file-pages">
+                        {stack.items.map((item, itemIndex) => {
+                            const { title } = itemCopy(item);
+                            return (
+                                <span
+                                    key={itemIndex}
+                                    className="design-file-page"
+                                    ref={(node) => {
+                                        pageRefs.current[itemIndex] = node;
+                                    }}
+                                >
+                                    <span className="design-file-face is-front">
+                                        <PaperClip />
+                                        <span className="design-file-mount">
+                                            {item.type === 'image' && item.src ? (
+                                                <img
+                                                    src={pageSrc(item.src)}
+                                                    width={item.width}
+                                                    height={item.height}
+                                                    alt=""
+                                                    draggable={false}
+                                                    decoding="async"
+                                                    fetchPriority={itemIndex === 0 ? 'high' : 'low'}
+                                                />
+                                            ) : null}
+                                        </span>
+                                        <span className="design-file-cap">{title}</span>
+                                        <span className="design-file-meta">
+                                            Item {itemIndex + 1} of {count}
+                                        </span>
+                                    </span>
+                                    <span className="design-file-face is-reverse" />
+                                </span>
+                            );
+                        })}
+                    </span>
+                    <span className="design-file-cover" ref={coverRef}>
+                        <span className="design-file-face is-front">
+                            <span className="design-file-typed">
+                                <span>Design Work</span>
+                                <span>File No. {number}</span>
+                                <span>Contents: {count} {count === 1 ? 'item' : 'items'}</span>
+                            </span>
+                            <BakedStamp
+                                text={stack.title}
+                                measureWidth={measureStampWidth}
+                                moving={false}
+                            />
+                        </span>
+                        <span className="design-file-face is-inside">
+                            <span className="design-file-typed">Contents</span>
+                            <span className="design-file-index">
+                                {contentsOf(stack.items).map(([title, views], entry) => (
+                                    <span key={title} className="design-file-entry">
+                                        <span className="design-file-entry-no">{entry + 1}.</span>
+                                        <span>
+                                            {title}
+                                            {views > 1 ? (
+                                                <span className="design-file-entry-views"> ({views} views)</span>
+                                            ) : null}
+                                        </span>
+                                    </span>
+                                ))}
+                            </span>
+                        </span>
+                    </span>
+                </span>
+            </span>
+        </button>
+    );
+}
+
 const GraffitiGallery = () => {
     const navigate = useNavigate();
     const stacks = designStacks;
 
-    const [orders, setOrders] = useState(() => stacks.map(identityOrder));
-    const [fannedStack, setFannedStack] = useState(null);
-    const [cyclingStack, setCyclingStack] = useState(null);
-    const [cardMs, setCardMs] = useState(FAN_MS);
     const [openStack, setOpenStack] = useState(null);
     const [isLeaving, setIsLeaving] = useState(false);
-    const [origin, setOrigin] = useState({ x: 0, y: 0 });
+    const [restoreFolder, setRestoreFolder] = useState(false);
+    const [origin] = useState({ x: 0, y: 0 });
     const [detailIndex, setDetailIndex] = useState(null);
     const [copyVisible, setCopyVisible] = useState(false);
     const [copyBox, setCopyBox] = useState(null);
@@ -550,6 +1168,7 @@ const GraffitiGallery = () => {
     const [railCue, setRailCue] = useState(emptyRailCue);
     const [motionGen, setMotionGen] = useState(0);
     const [chromeOn, setChromeOn] = useState(false);
+    const [heroHold, setHeroHold] = useState(false);
 
     const buttonsRef = useRef([]);
     const overlayRef = useRef(null);
@@ -564,8 +1183,9 @@ const GraffitiGallery = () => {
     const veilRef = useRef(null);
     const pileRef = useRef([]);
     const leaveTimerRef = useRef(0);
-    const lastSwapRef = useRef(0);
-    const cyclingRef = useRef(null);
+    const preloadedRef = useRef(new Map());
+    const returnArmed = useRef(false);
+    const returnIndexRef = useRef(null);
     const cardRefs = useRef([]);
     const copyRef = useRef(null);
     const titleRef = useRef(null);
@@ -586,14 +1206,10 @@ const GraffitiGallery = () => {
     const pendingCloseRef = useRef(null);
     const thumbsDockedRef = useRef(false);
     if (!revealRef.current) revealRef.current = createTextReveal();
-    cyclingRef.current = cyclingStack;
     thumbsDockedRef.current = thumbsDocked;
 
     const motion = useMemo(
         () => ({
-            fineHover:
-                typeof window !== 'undefined'
-                && window.matchMedia('(hover: hover) and (pointer: fine)').matches,
             reduced:
                 typeof window !== 'undefined'
                 && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -773,27 +1389,9 @@ const GraffitiGallery = () => {
         const stack = stacks[stackIndex];
         if (!stack) return [];
         const button = buttonsRef.current[stackIndex];
-        const order = orders[stackIndex] || identityOrder(stack);
-        const depths = new Map(order.map((item, depth) => [item, depth]));
-        const nodes = button?.querySelectorAll('.stack-card');
-        const box = button?.querySelector('.design-stack-cards')?.getBoundingClientRect();
+        const box = button?.querySelector('.design-file-stage')?.getBoundingClientRect();
+        const size = (box?.width || 200) * FILE_REST_FILL;
         return stack.items.map((item, itemIndex) => {
-            const depth = depths.get(itemIndex) ?? 0;
-            const z = stack.items.length - depth;
-            const node = nodes?.[itemIndex];
-            const rect = node?.getBoundingClientRect();
-            if (rect && rect.width > 1 && rect.height > 1) {
-                return {
-                    x: rect.left,
-                    y: rect.top,
-                    w: rect.width,
-                    h: rect.height,
-                    o: 1,
-                    z,
-                    role: 'pile',
-                };
-            }
-            const size = box?.width || 200;
             const fit = pileFit(item, stack);
             const w = size * fit.w;
             const h = size * fit.h;
@@ -803,7 +1401,7 @@ const GraffitiGallery = () => {
                 w,
                 h,
                 o: 1,
-                z,
+                z: stack.items.length - itemIndex,
                 role: 'pile',
             };
         });
@@ -969,9 +1567,10 @@ const GraffitiGallery = () => {
         setClose(0);
         applyAll(safeFrom, to, skipRoles);
         posesRef.current = safeFrom;
-        const t0 = performance.now();
+        let t0 = extras.startOnFrame ? null : performance.now();
         const tick = (now) => {
             try {
+                if (t0 == null) t0 = now;
                 const raw = Math.min(1, (now - t0) / duration);
                 const amount = easeBezier(DETAIL_EASE, raw);
                 const next = safeFrom.map((pose, index) => lerpPose(pose, to[index], amount));
@@ -1005,42 +1604,20 @@ const GraffitiGallery = () => {
         return computeDetailLayout(openDetail, heroIndex, viewBox());
     }, [openDetail]);
 
-    const beginHover = (stackIndex) => {
-        if (motion.reduced || isOpen) return;
-        window.clearTimeout(leaveTimerRef.current);
-        setCardMs(FAN_MS);
-        setFannedStack(stackIndex);
-        if (motion.fineHover) setCyclingStack(stackIndex);
-    };
-
-    const settleStack = useCallback((stackIndex) => {
-        setCardMs(FAN_MS);
-        setFannedStack((current) => (current === stackIndex ? null : current));
-        setCyclingStack((current) => (current === stackIndex ? null : current));
-    }, []);
-
-    const endHover = (stackIndex) => {
-        if (motion.reduced || isOpen) return;
-        setCyclingStack((current) => (current === stackIndex ? null : current));
-        const remaining = Math.max(0, lastSwapRef.current + SWAP_MS - performance.now());
-        window.clearTimeout(leaveTimerRef.current);
-        leaveTimerRef.current = window.setTimeout(() => settleStack(stackIndex), remaining);
-    };
-
-    useEffect(() => {
-        if (cyclingStack === null || isOpen || motion.reduced) return undefined;
-        const id = window.setInterval(() => {
-            if (cyclingRef.current !== cyclingStack) return;
-            setCardMs(SWAP_MS);
-            lastSwapRef.current = performance.now();
-            setOrders((previous) =>
-                previous.map((order, index) =>
-                    index === cyclingStack ? advanceOrder(order) : order
-                )
-            );
-        }, CAROUSEL_INTERVAL_MS);
-        return () => window.clearInterval(id);
-    }, [cyclingStack, isOpen, motion.reduced]);
+    const preloadStack = useCallback((stackIndex) => {
+        const stack = stacks[stackIndex];
+        if (!stack || preloadedRef.current.has(stackIndex)) return;
+        const images = [];
+        stack.items.forEach((item) => {
+            if (item.type !== 'image' || !item.src) return;
+            const preload = new Image();
+            preload.decoding = 'async';
+            preload.src = item.src;
+            decodeImage(preload);
+            images.push(preload);
+        });
+        preloadedRef.current.set(stackIndex, images);
+    }, [stacks]);
 
     const hideCopy = () => {
         revealRef.current.clear({
@@ -1063,6 +1640,10 @@ const GraffitiGallery = () => {
         setThumbsDocked(false);
         setRailCue(emptyRailCue);
         setChromeOn(false);
+        setHeroHold(false);
+        setRestoreFolder(false);
+        returnArmed.current = false;
+        returnIndexRef.current = null;
         posesRef.current = [];
         destRef.current = [];
         settledRef.current = null;
@@ -1074,13 +1655,14 @@ const GraffitiGallery = () => {
         pendingJobRef.current = null;
         pendingPinRef.current = null;
         pendingCloseRef.current = null;
-        if (trigger) trigger.focus();
+        if (trigger) window.requestAnimationFrame(() => trigger.focus({ preventScroll: true }));
     }, [openStack]);
 
     const moveDetail = useCallback((nextIndex) => {
         if (!openDetail) return;
         if (nextIndex === detailIndex && !busyRef.current) return;
         hideCopy();
+        setHeroHold(false);
         const layout = layoutFor(nextIndex);
         if (!layout) {
             releaseBusy();
@@ -1105,61 +1687,79 @@ const GraffitiGallery = () => {
         setMotionGen((value) => value + 1);
     }, [openDetail, detailIndex, layoutFor]);
 
+    const closeDetail = useCallback(() => {
+        if (!isOpen || isLeaving || detailIndex == null) return;
+        returnIndexRef.current = detailIndex;
+        setHeroHold(true);
+        setChromeOn(false);
+        setIsLeaving(true);
+        setRestoreFolder(true);
+    }, [isOpen, isLeaving, detailIndex]);
+
     const closeStack = useCallback(() => {
         if (!isOpen || isLeaving) return;
-        if (detailIndex != null || thumbsDockedRef.current) {
-            moveDetail(null);
+        if (detailIndex != null) {
+            closeDetail();
             return;
         }
         hideCopy();
         const from = measureOnScreen();
-        const pile = measurePilePoses(openStack);
-        pileRef.current = pile;
-        const runLeave = (start) => {
-            if (motion.reduced || !start.length) {
-                setIsLeaving(true);
-                setChromeOn(false);
-                if (!start.length) {
-                    window.clearTimeout(leaveTimerRef.current);
-                    leaveTimerRef.current = window.setTimeout(finishClose, CLOSE_MS);
-                    return;
-                }
-                finishClose();
-                return;
-            }
-            const to = pile.length === start.length
-                ? pile
-                : start.map((pose, index) => poseOr(pile[index], {
-                    x: pose.x,
-                    y: pose.y,
-                    w: pose.w,
-                    h: pose.h,
-                    o: 1,
-                    role: 'pile',
-                }));
-            const token = armBusy();
-            setIsLeaving(true);
-            setChromeOn(false);
-            runMotion(start, to, () => {
-                releaseBusy(token);
-                finishClose();
-            }, { duration: CLOSE_MS, veilFrom: 1, veilTo: 0 });
-        };
-        pendingJobRef.current = null;
-        if (thumbsDockedRef.current) {
-            pendingPinRef.current = from;
-            pendingCloseRef.current = () => runLeave(from);
-            setThumbsDocked(false);
-            setMotionGen((value) => value + 1);
+        const to = from.map((pose) => ({ ...pose, o: 0 }));
+        setIsLeaving(true);
+        setChromeOn(false);
+        const token = armBusy();
+        runMotion(from, to, () => {
+            releaseBusy(token);
+            finishClose();
+        }, { duration: CLOSE_MS, veilFrom: 1, veilTo: 0 });
+    }, [isOpen, isLeaving, detailIndex, closeDetail, finishClose]);
+
+    useLayoutEffect(() => {
+        if (!restoreFolder) {
+            returnArmed.current = false;
             return;
         }
-        runLeave(from);
-    }, [isOpen, isLeaving, motion.reduced, finishClose, origin, openDetail, detailIndex, moveDetail, openStack, orders]);
-
-    const closeDetail = useCallback(() => {
-        if (detailIndex == null && !thumbsDockedRef.current && !busyRef.current) return;
-        moveDetail(null);
-    }, [detailIndex, moveDetail]);
+        if (returnArmed.current) return;
+        returnArmed.current = true;
+        const index = returnIndexRef.current;
+        const button = buttonsRef.current[openStack];
+        const img = button?.querySelectorAll('.design-file-page')[index]
+            ?.querySelector('.design-file-mount img');
+        const box = contentBox(img);
+        const from = measureOnScreen();
+        const docked = thumbsDockedRef.current;
+        const to = from.map((pose, poseIndex) => {
+            if (poseIndex === index && box) {
+                return {
+                    x: box.left,
+                    y: box.top,
+                    w: box.width,
+                    h: box.height,
+                    o: 1,
+                    role: 'hero',
+                };
+            }
+            if (poseIndex === index) {
+                return { ...poseOr(pose, pose), o: 0, role: 'hero' };
+            }
+            return { ...poseOr(pose, pose), o: 0, role: 'thumb' };
+        });
+        const closeRect = closeRef.current?.getBoundingClientRect();
+        const closePose = closeRect ? { x: closeRect.left, y: closeRect.top } : null;
+        const token = armBusy();
+        runMotion(from, to, () => {
+            releaseBusy(token);
+            finishClose();
+        }, {
+            duration: CLOSE_MS,
+            veilFrom: 1,
+            veilTo: 0,
+            startOnFrame: true,
+            skipRoles: docked ? new Set(['thumb']) : null,
+            closeFrom: closePose,
+            closeTo: closePose,
+        });
+    }, [restoreFolder, openStack, finishClose]);
 
     const onCloseStep = (event) => {
         event.stopPropagation();
@@ -1233,6 +1833,7 @@ const GraffitiGallery = () => {
             destRef.current = layout.poses;
             applyAll(job.from, layout.poses);
             runMotion(job.from, layout.poses, () => {
+                setHeroHold(false);
                 if (!releaseBusy(job.token)) return;
                 pinSettledHero(layout);
                 probeHero(job.nextIndex != null ? 'grow-end' : 'grid-end', layout);
@@ -1251,6 +1852,7 @@ const GraffitiGallery = () => {
                 applyAll(layout.poses, layout.poses);
             }, {
                 probe: job.nextIndex != null ? 'grow-frame' : null,
+                ...job.extras,
             });
             return;
         }
@@ -1336,19 +1938,8 @@ const GraffitiGallery = () => {
     }, []);
 
     useEffect(() => {
-        const indexes = [fannedStack, cyclingStack, openStack].filter(Number.isInteger);
-        indexes.forEach((stackIndex) => {
-            const stack = stacks[stackIndex];
-            if (!stack) return;
-            stack.items.forEach((item) => {
-                if (item.type !== 'image' || !item.src) return;
-                const preload = new Image();
-                preload.decoding = 'async';
-                preload.src = item.src;
-                decodeImage(preload);
-            });
-        });
-    }, [fannedStack, cyclingStack, openStack, stacks]);
+        if (Number.isInteger(openStack)) preloadStack(openStack);
+    }, [openStack, preloadStack]);
 
     useEffect(() => {
         if (!isOpen) return undefined;
@@ -1459,34 +2050,45 @@ const GraffitiGallery = () => {
         closeStack();
     };
 
-    const openFromButton = (stackIndex, button) => {
+    const openFromFolder = (stackIndex, itemIndex, rect) => {
+        const stack = stacks[stackIndex];
+        if (!stack || isOpen || !stack.items[itemIndex]) return;
         window.clearTimeout(leaveTimerRef.current);
-        setCyclingStack(null);
-        setFannedStack(null);
+        stopMotion();
         hideCopy();
-        pileRef.current = measurePilePoses(stackIndex);
-        setDetailIndex(null);
-        openedRef.current = false;
-        posesRef.current = [];
-        destRef.current = [];
-        settledRef.current = null;
-        pendingJobRef.current = null;
-        pendingPinRef.current = null;
-        pendingCloseRef.current = null;
         busyTokenRef.current += 1;
         releaseBusy();
+        const layout = computeDetailLayout(stack, itemIndex, viewBox());
+        const from = layout.poses.map((pose, index) => (
+            index === itemIndex && rect
+                ? { x: rect.left, y: rect.top, w: rect.width, h: rect.height, o: 1, role: 'hero' }
+                : { ...pose, o: 0 }
+        ));
+        openedRef.current = true;
+        pileRef.current = [];
+        posesRef.current = [];
+        destRef.current = layout.poses;
+        settledRef.current = layout;
+        railRef.current = layout.rail;
+        const token = armBusy();
+        pendingJobRef.current = {
+            from,
+            layout,
+            nextIndex: itemIndex,
+            token,
+            extras: { veilFrom: 0, veilTo: 1, startOnFrame: true },
+        };
+        pendingPinRef.current = from;
+        pendingCloseRef.current = null;
         setThumbsDocked(false);
         setRailCue(emptyRailCue);
-        const rect = button?.getBoundingClientRect();
-        if (rect) {
-            setOrigin({
-                x: rect.left + rect.width / 2 - window.innerWidth / 2,
-                y: rect.top + rect.height / 2 - window.innerHeight / 2,
-            });
-        } else {
-            setOrigin({ x: 0, y: 0 });
-        }
+        setHeroHold(Boolean(rect));
+        setDetailIndex(itemIndex);
+        setCopyBox(layout.copy);
+        setRailBox(layout.rail);
+        setDetailExtent(layout.extent || 0);
         setOpenStack(stackIndex);
+        setMotionGen((value) => value + 1);
     };
 
     return (
@@ -1505,77 +2107,37 @@ const GraffitiGallery = () => {
                 </span>
             </div>
 
+            <svg className="design-file-defs" width="0" height="0" aria-hidden="true" focusable="false">
+                <filter id="design-stamp-ink" x="-10%" y="-10%" width="120%" height="120%" colorInterpolationFilters="sRGB">
+                    <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="4" result="grit" />
+                    <feDisplacementMap in="SourceGraphic" in2="grit" scale="2.4" xChannelSelector="R" yChannelSelector="G" result="rough" />
+                    <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="1" seed="9" result="spots" />
+                    <feColorMatrix in="spots" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -7 5" result="holes" />
+                    <feComposite in="rough" in2="holes" operator="in" />
+                </filter>
+            </svg>
+
             <div className="design-stacks">
                 <div className="design-stacks-grid">
-                    {stacks.map((stack, stackIndex) => {
-                        const order = orders[stackIndex];
-                        const depths = new Map(order.map((item, depth) => [item, depth]));
-                        const fanned = fannedStack === stackIndex && !isOpen && !motion.reduced;
-                        return (
-                            <button
-                                type="button"
-                                key={stack.title}
-                                ref={(node) => {
-                                    buttonsRef.current[stackIndex] = node;
-                                }}
-                                className={[
-                                    'design-stack',
-                                    fanned ? 'is-fanned' : '',
-                                    isOpen && stackIndex !== openStack ? 'is-background' : '',
-                                    isOpen && stackIndex === openStack ? 'is-source-open' : '',
-                                ].filter(Boolean).join(' ')}
-                                style={{ '--card-ms': `${fanned ? cardMs : FAN_MS}ms` }}
-                                aria-label={`${stack.title}, ${stack.items.length} items`}
-                                onMouseEnter={() => {
-                                    if (!motion.fineHover) return;
-                                    beginHover(stackIndex);
-                                }}
-                                onMouseLeave={() => {
-                                    if (!motion.fineHover) return;
-                                    endHover(stackIndex);
-                                }}
-                                onFocus={(event) => {
-                                    if (!isKeyboardFocus(event.target)) return;
-                                    beginHover(stackIndex);
-                                }}
-                                onBlur={() => endHover(stackIndex)}
-                                onClick={(event) => openFromButton(stackIndex, event.currentTarget)}
-                            >
-                                <span className="design-stack-cards">
-                                    {stack.items.map((item, itemIndex) => {
-                                        const depth = depths.get(itemIndex) ?? 0;
-                                        const pose = poseFor(depth, fanned);
-                                        const stackActive = fanned
-                                            || cyclingStack === stackIndex
-                                            || (isOpen && stackIndex === openStack);
-                                        const onTop = depth === 0;
-                                        const fit = pileFit(item, stack);
-                                        return (
-                                            <span
-                                                key={itemIndex}
-                                                className={`stack-card ${cardClassNames(stack, [], item)}`}
-                                                style={{
-                                                    zIndex: stack.items.length - depth,
-                                                    '--fit-w': String(fit.w),
-                                                    '--fit-h': String(fit.h),
-                                                    transform: `translate(-50%, -50%) translate3d(${pose.x}px, ${pose.y}px, 0) rotate(${pose.r}deg)`,
-                                                }}
-                                            >
-                                                <StackCardFace
-                                                    item={item}
-                                                    index={itemIndex}
-                                                    title={stack.title}
-                                                    loading={stackActive || onTop ? 'eager' : 'lazy'}
-                                                    fetchPriority={onTop ? 'high' : 'low'}
-                                                />
-                                            </span>
-                                        );
-                                    })}
-                                </span>
-                                <span className="design-stack-title">{stack.title}</span>
-                            </button>
-                        );
-                    })}
+                    {stacks.map((stack, stackIndex) => (
+                        <CaseFile
+                            key={stack.title}
+                            stack={stack}
+                            stackIndex={stackIndex}
+                            className={[
+                                'design-stack',
+                                isOpen && stackIndex !== openStack ? 'is-background' : '',
+                                isOpen && stackIndex === openStack && !restoreFolder ? 'is-source-open' : '',
+                            ].filter(Boolean).join(' ')}
+                            inert={isOpen && !restoreFolder}
+                            showPage={restoreFolder && stackIndex === openStack ? detailIndex : null}
+                            setButton={(node) => {
+                                buttonsRef.current[stackIndex] = node;
+                            }}
+                            onOpenDetail={openFromFolder}
+                            onOpenFile={preloadStack}
+                        />
+                    ))}
                 </div>
             </div>
 
@@ -1602,7 +2164,7 @@ const GraffitiGallery = () => {
                     <button
                         type="button"
                         className="stack-overlay-close"
-                        aria-label={inDetail ? 'Back to grid' : 'Close'}
+                        aria-label="Close"
                         ref={closeRef}
                         onClick={onCloseStep}
                     >
@@ -1731,6 +2293,8 @@ const GraffitiGallery = () => {
                                                 title={openDetail.title}
                                                 loading="eager"
                                                 fetchPriority="high"
+                                                placeholder={role === 'hero' && item.src ? pageSrc(item.src) : null}
+                                                hold={role === 'hero' && heroHold}
                                             />
                                         </span>
                                     </button>
