@@ -300,6 +300,25 @@ li {
     width: 100%;
     max-width: 100%;
     flex-basis: auto;
+    padding: 20px;
+  }
+
+  .location {
+    font-size: 1em;
+  }
+
+  .resume-container .resume-bio,
+  .resume-container .resume-role-intro,
+  .resume-container .resume-note,
+  .resume-container li,
+  .resume-container .skill-group p,
+  .resume-container .outside-copy {
+    font-size: 0.875rem;
+    line-height: 1.6;
+  }
+
+  .resume-section h2 {
+    font-size: 1.45rem;
   }
 
   .resume-name {
@@ -322,7 +341,21 @@ li {
   }
 
   .resume-role-head h3 {
-    font-size: 1.2rem;
+    font-size: 1.05rem;
+  }
+
+  .resume-role,
+  .resume-card {
+    padding: 18px;
+  }
+
+  .resume-role-meta,
+  .resume-role-dates {
+    font-size: 0.875rem;
+  }
+
+  .skill-group h3 {
+    font-size: 0.95rem;
   }
 
   .skill-group {

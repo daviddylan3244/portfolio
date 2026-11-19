@@ -611,11 +611,21 @@ const contentsOf = (items) => {
     return [...counts];
 };
 
-function PaperClip() {
+function ClipWire({ front = false }) {
     return (
-        <svg className="design-file-clip" viewBox="0 0 22 56" aria-hidden="true" focusable="false">
-            <path d="M7 40V9a4.5 4.5 0 0 1 9 0v34a7.5 7.5 0 0 1-15 0V14" />
+        <svg className={`design-file-clip${front ? ' is-front' : ' is-back'}`} viewBox="0 0 22 56" aria-hidden="true" focusable="false">
+            <path d={front ? 'M16 9v34a7.5 7.5 0 0 1-15 0V14' : 'M7 40V9a4.5 4.5 0 0 1 9 0'} />
         </svg>
+    );
+}
+
+function ClipBox({ children, style }) {
+    return (
+        <span className="design-file-clip-box" style={style}>
+            <ClipWire />
+            {children}
+            <ClipWire front />
+        </span>
     );
 }
 
@@ -1234,20 +1244,9 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
                                     }}
                                 >
                                     <span className="design-file-face is-front">
-                                        <PaperClip />
                                         <span className={`design-file-mount${itemImages(item).length > 1 ? ' is-multi' : ''}`}>
-                                            {itemImages(item).length > 1 ? (
+                                            {itemImages(item).length ? (
                                                 <PagePictures item={item} priority={itemIndex === 0} />
-                                            ) : item.type === 'image' && item.src ? (
-                                                <img
-                                                    src={pageSrc(item.src)}
-                                                    width={item.width}
-                                                    height={item.height}
-                                                    alt=""
-                                                    draggable={false}
-                                                    decoding="async"
-                                                    fetchPriority={itemIndex === 0 ? 'high' : 'low'}
-                                                />
                                             ) : null}
                                         </span>
                                         <span className="design-file-cap">{title}</span>
@@ -1394,27 +1393,39 @@ function PagePictures({ item, priority = false }) {
     const images = itemImages(item);
     return (
         <span className="design-file-prints" style={{ '--stack-aspect': pageStackAspect(images) }}>
-            {images.map((image, imageIndex) => (
-                <span
-                    key={image.src}
-                    className="design-file-print"
-                    style={{
-                        aspectRatio: image.width > 0 && image.height > 0
-                            ? `${image.width} / ${image.height}`
-                            : '1 / 1',
-                    }}
-                >
-                    <img
-                        src={pageSrc(image.src)}
-                        width={image.width}
-                        height={image.height}
-                        alt=""
-                        draggable={false}
-                        decoding="async"
-                        fetchPriority={priority && imageIndex === 0 ? 'high' : 'low'}
-                    />
-                </span>
-            ))}
+            {images.map((image, imageIndex) => {
+                const aspectRatio = image.width > 0 && image.height > 0
+                    ? `${image.width} / ${image.height}`
+                    : '1 / 1';
+                const print = (
+                    <span className="design-file-print">
+                        <img
+                            src={pageSrc(image.src)}
+                            width={image.width}
+                            height={image.height}
+                            alt=""
+                            draggable={false}
+                            decoding="async"
+                            fetchPriority={priority && imageIndex === 0 ? 'high' : 'low'}
+                        />
+                    </span>
+                );
+                return imageIndex === 0 ? (
+                    <ClipBox key={image.src} style={{ aspectRatio }}>{print}</ClipBox>
+                ) : (
+                    <span key={image.src} className="design-file-print" style={{ aspectRatio }}>
+                        <img
+                            src={pageSrc(image.src)}
+                            width={image.width}
+                            height={image.height}
+                            alt=""
+                            draggable={false}
+                            decoding="async"
+                            fetchPriority="low"
+                        />
+                    </span>
+                );
+            })}
         </span>
     );
 }
@@ -1424,6 +1435,38 @@ const viewerPrint = (item, geo) => {
     const leafH = geo.h * 0.95;
     const areaW = leafW * (geo.single ? 0.84 : 0.82);
     const areaH = leafH * (geo.single ? 0.5 : 0.81);
+    const border = Math.max(4, Math.round(Math.min(areaW, areaH) * 0.03));
+    const inner = fitRect(aspectOf(item), areaW - border * 2, areaH - border * 2);
+    return {
+        w: Math.round(inner.w + border * 2),
+        h: Math.round(inner.h + border * 2),
+        border,
+    };
+};
+
+// Phone notes card, from the option 1 + 3 mockup. Peek is 12.5% of the
+// screen width, and the open card covers 60% of the page.
+const viewerPhoneBox = (geo, lift) => {
+    const clamped = Math.min(1, Math.max(0, lift || 0));
+    const leafW = geo.w * 0.97;
+    const leafH = geo.h * 0.95;
+    const peek = geo.vw * 0.125;
+    const cardH = leafH * 0.6;
+    const padTop = geo.vw * 0.06;
+    const closedH = leafH - peek - geo.vw * 0.01;
+    const openH = leafH - cardH - geo.vw * 0.005;
+    const photoH = closedH + (openH - closedH) * clamped;
+    return {
+        peek,
+        cardH,
+        padTop,
+        photoH,
+        areaW: leafW * 0.84,
+        areaH: Math.max(36, photoH - padTop - 2),
+    };
+};
+
+const viewerAreaFrame = (item, areaW, areaH) => {
     const border = Math.max(4, Math.round(Math.min(areaW, areaH) * 0.03));
     const inner = fitRect(aspectOf(item), areaW - border * 2, areaH - border * 2);
     return {
@@ -1453,16 +1496,8 @@ function ViewerFrame({ image, contentW, border, load, title, clip = false }) {
     const aspect = Math.max(0.2, aspectOf(image));
     const width = Math.round(contentW + border * 2);
     const height = Math.round(contentW / aspect + border * 2);
-    return (
-        <span
-            className="folder-viewer-print"
-            style={{
-                width: `${width}px`,
-                height: `${height}px`,
-                '--b': `${border}px`,
-            }}
-        >
-            {clip ? <PaperClip /> : null}
+    const print = (
+        <span className="folder-viewer-print" style={{ '--b': `${border}px` }}>
             <img
                 className="folder-viewer-image is-small"
                 src={pageSrc(image.src)}
@@ -1484,10 +1519,43 @@ function ViewerFrame({ image, contentW, border, load, title, clip = false }) {
             ) : null}
         </span>
     );
+    if (!clip) {
+        return (
+            <span
+                className="folder-viewer-print"
+                style={{ width: `${width}px`, height: `${height}px`, '--b': `${border}px` }}
+            >
+                <img
+                    className="folder-viewer-image is-small"
+                    src={pageSrc(image.src)}
+                    alt=""
+                    aria-hidden="true"
+                    draggable={false}
+                    decoding="async"
+                />
+                {load ? (
+                    <img
+                        className={`folder-viewer-image is-full${fullReady ? ' is-ready' : ''}`}
+                        src={image.src}
+                        alt={title}
+                        draggable={false}
+                        decoding="async"
+                        onLoad={() => setFullReady(true)}
+                        onError={() => setFullReady(true)}
+                    />
+                ) : null}
+            </span>
+        );
+    }
+    return (
+        <ClipBox style={{ width: `${width}px`, height: `${height}px` }}>
+            {print}
+        </ClipBox>
+    );
 }
 
-function ViewerSingle({ item, geo, load, top = false }) {
-    const print = viewerPrint(item, geo);
+function ViewerSingle({ item, geo, load, top = false, frame = null }) {
+    const print = frame || viewerPrint(item, geo);
     const { title } = itemCopy(item);
     const [fullReady, setFullReady] = useState(false);
     useEffect(() => {
@@ -1495,11 +1563,11 @@ function ViewerSingle({ item, geo, load, top = false }) {
     }, [item?.src, load]);
     return (
         <span className={`folder-viewer-mount${top ? ' is-top' : ''}`}>
+            <ClipBox style={{ width: `${print.w}px`, height: `${print.h}px` }}>
             <span
                 className="folder-viewer-print"
-                style={{ width: `${print.w}px`, height: `${print.h}px`, '--b': `${print.border}px` }}
+                style={{ '--b': `${print.border}px` }}
             >
-                <PaperClip />
                 {item.type === 'image' && item.src ? (
                     <>
                         <img
@@ -1524,20 +1592,23 @@ function ViewerSingle({ item, geo, load, top = false }) {
                     </>
                 ) : null}
             </span>
+            </ClipBox>
         </span>
     );
 }
 
-function ViewerMount({ item, geo, load, top = false }) {
+function ViewerMount({ item, geo, load, top = false, lift = null }) {
     const images = itemImages(item);
     const { title } = itemCopy(item);
+    const box = lift == null ? null : viewerPhoneBox(geo, lift);
     if (images.length <= 1) {
-        return <ViewerSingle item={item} geo={geo} load={load} top={top} />;
+        const frame = box ? viewerAreaFrame(item, box.areaW, box.areaH) : null;
+        return <ViewerSingle item={item} geo={geo} load={load} top={top} frame={frame} />;
     }
     const leafW = geo.w * 0.97;
     const leafH = geo.h * 0.95;
-    const areaW = leafW * (geo.single ? 0.84 : 0.82);
-    const areaH = leafH * (geo.single ? 0.5 : 0.81);
+    const areaW = box ? box.areaW : leafW * (geo.single ? 0.84 : 0.82);
+    const areaH = box ? box.areaH : leafH * (geo.single ? 0.5 : 0.81);
     const border = Math.max(4, Math.round(Math.min(areaW, areaH) * 0.03));
     const sumInv = images.reduce((sum, image) => sum + (1 / Math.max(0.2, aspectOf(image))), 0);
     const contentW = Math.max(1, Math.min(
@@ -1563,6 +1634,65 @@ function ViewerMount({ item, geo, load, top = false }) {
     );
 }
 
+function NotesCard({ item, open, onToggle, onPointerDown, onPointerMove, onPointerUp }) {
+    const copy = itemCopy(item);
+    const scrollRef = useRef(null);
+    const [more, setMore] = useState(false);
+    const watch = `${open}|${copy.date}|${copy.description}`;
+
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el) return undefined;
+        const update = () => {
+            setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 2);
+        };
+        update();
+        el.addEventListener('scroll', update, { passive: true });
+        const id = window.setTimeout(update, 480);
+        return () => {
+            el.removeEventListener('scroll', update);
+            window.clearTimeout(id);
+        };
+    }, [watch]);
+
+    return (
+        <span className="folder-viewer-card">
+            <button
+                type="button"
+                className="folder-viewer-card-head"
+                aria-expanded={open}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    onToggle();
+                }}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+            >
+                <span className="folder-viewer-card-title">{copy.title}</span>
+                <span className="folder-viewer-card-chev" aria-hidden="true">▲</span>
+            </button>
+            <span className="folder-viewer-card-body">
+                <span
+                    className={`folder-viewer-card-scroll${more ? ' has-more' : ''}`}
+                    ref={scrollRef}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onPointerUp={(event) => event.stopPropagation()}
+                    onTouchStart={(event) => event.stopPropagation()}
+                    onTouchEnd={(event) => event.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    {copy.date ? <span className="folder-viewer-card-date">{copy.date}</span> : null}
+                    {copy.description ? (
+                        <span className="folder-viewer-card-desc">{copy.description}</span>
+                    ) : null}
+                </span>
+            </span>
+        </span>
+    );
+}
+
 function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, getRestRect, onClosed }) {
     const count = stack.items.length;
     const number = fileNumber(stackIndex);
@@ -1582,7 +1712,19 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
     const timersRef = useRef([]);
     const leafTimersRef = useRef(new Map());
     const swipeRef = useRef(null);
+    const notesDragRef = useRef(null);
+    const ignoreNotesClickRef = useRef(false);
+    const [notesLift, setNotesLift] = useState(0);
+    const [notesDragging, setNotesDragging] = useState(false);
+    const notesLiftRef = useRef(0);
     geoRef.current = geo;
+    notesLiftRef.current = notesLift;
+
+    const setNotes = (value) => {
+        const next = Math.min(1, Math.max(0, value));
+        notesLiftRef.current = next;
+        setNotesLift(next);
+    };
 
     const leaves = () => leafRefs.current.slice(0, count).filter(Boolean);
 
@@ -1874,6 +2016,7 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
     };
 
     const onPointerDown = (event) => {
+        if (event.target.closest('.folder-viewer-card')) return;
         beginSwipe(event.clientX, event.clientY);
     };
 
@@ -1882,6 +2025,7 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
     };
 
     const onTouchStart = (event) => {
+        if (event.target.closest('.folder-viewer-card')) return;
         const touch = event.changedTouches[0];
         if (touch) beginSwipe(touch.clientX, touch.clientY);
     };
@@ -1897,11 +2041,7 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
             swipeRef.current = null;
             return;
         }
-        if (geoRef.current.single) {
-            if (event.clientX >= geoRef.current.vw / 2) goNext();
-            else goBack();
-            return;
-        }
+        if (geoRef.current.single) return;
         const onLeft = event.target.closest(
             '.design-file-cover, .folder-viewer-leaf.is-turned, .folder-viewer-face.is-back'
         );
@@ -1909,7 +2049,64 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
         else goNext();
     };
 
+    const onNotesPointerDown = (event) => {
+        event.stopPropagation();
+        if (phaseRef.current !== 'open') return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        notesDragRef.current = {
+            id: event.pointerId,
+            y: event.clientY,
+            base: notesLiftRef.current,
+            moved: false,
+        };
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+    };
+
+    const onNotesPointerMove = (event) => {
+        const drag = notesDragRef.current;
+        if (!drag || event.pointerId !== drag.id) return;
+        event.stopPropagation();
+        const dy = event.clientY - drag.y;
+        if (!drag.moved) {
+            if (Math.abs(dy) < 8) return;
+            drag.moved = true;
+            ignoreNotesClickRef.current = true;
+            setNotesDragging(true);
+        }
+        const metrics = viewerPhoneBox(geoRef.current, 0);
+        const range = Math.max(1, metrics.cardH - metrics.peek);
+        setNotes(drag.base - dy / range);
+    };
+
+    const onNotesPointerUp = (event) => {
+        const drag = notesDragRef.current;
+        if (!drag || event.pointerId !== drag.id) return;
+        event.stopPropagation();
+        notesDragRef.current = null;
+        if (!drag.moved) return;
+        window.setTimeout(() => {
+            ignoreNotesClickRef.current = false;
+        }, 400);
+        const lift = notesLiftRef.current;
+        const open = drag.base > 0.5 ? lift > 0.7 : lift > 0.3;
+        setNotesDragging(false);
+        setNotes(open ? 1 : 0);
+    };
+
+    const onNotesToggle = () => {
+        if (ignoreNotesClickRef.current) {
+            ignoreNotesClickRef.current = false;
+            return;
+        }
+        if (phaseRef.current !== 'open') return;
+        setNotes(notesLiftRef.current > 0.5 ? 0 : 1);
+    };
+
     const current = stack.items[index];
+    const phoneNavTop = Math.round(Math.min(
+        geo.stageTop + geo.h + 24,
+        geo.vh - VIEWER_ARROW - 12
+    ));
     const arrowTop = geo.stageTop + geo.h / 2 - VIEWER_ARROW / 2;
     const leftArrow = Math.max(8, geo.vw / 2 - geo.w - VIEWER_ARROW_GAP - VIEWER_ARROW);
     const rightArrow = Math.min(geo.vw - VIEWER_ARROW - 8, geo.vw / 2 + geo.w + VIEWER_ARROW_GAP);
@@ -1922,6 +2119,7 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
                 phase === 'open' ? 'is-ready' : '',
                 phase === 'closing' ? 'is-closing' : '',
                 geo.single ? 'is-single' : '',
+                geo.single && notesDragging ? 'is-notes-dragging' : '',
                 reduced ? 'is-reduced' : '',
             ].filter(Boolean).join(' ')}
             role="dialog"
@@ -1929,6 +2127,11 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
             aria-label={`${stack.title}, file ${number}`}
             tabIndex={-1}
             ref={rootRef}
+            style={geo.single ? {
+                '--lift': String(notesLift),
+                '--peek': `${Math.round(geo.vw * 0.125)}px`,
+                '--card-h': `${Math.round(geo.h * 0.95 * 0.6)}px`,
+            } : undefined}
         >
             <div className="folder-viewer-backdrop" onClick={close} />
             <span
@@ -1963,15 +2166,32 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
                                 }}
                             >
                                 <span className="folder-viewer-face is-front">
-                                    <ViewerMount
-                                        item={item}
-                                        geo={geo}
-                                        load={loaded.has(itemIndex)}
-                                        top={geo.single}
-                                    />
                                     {geo.single ? (
-                                        <ViewerText item={item} index={itemIndex} count={count} below />
-                                    ) : null}
+                                        <span className="folder-viewer-phone">
+                                            <span className="folder-viewer-phone-photo">
+                                                <ViewerMount
+                                                    item={item}
+                                                    geo={geo}
+                                                    load={loaded.has(itemIndex)}
+                                                    lift={notesLift}
+                                                />
+                                            </span>
+                                            <NotesCard
+                                                item={item}
+                                                open={notesLift > 0.5}
+                                                onToggle={onNotesToggle}
+                                                onPointerDown={onNotesPointerDown}
+                                                onPointerMove={onNotesPointerMove}
+                                                onPointerUp={onNotesPointerUp}
+                                            />
+                                        </span>
+                                    ) : (
+                                        <ViewerMount
+                                            item={item}
+                                            geo={geo}
+                                            load={loaded.has(itemIndex)}
+                                        />
+                                    )}
                                 </span>
                                 <span className="folder-viewer-face is-back">
                                     {!geo.single && stack.items[itemIndex + 1] ? (
@@ -1999,15 +2219,40 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
                             />
                         </span>
                         <span className="design-file-face is-inside">
-                            {!geo.single ? (
+                            {geo.single ? (
+                                <span className="folder-viewer-sheet is-blank" />
+                            ) : (
                                 <span className="folder-viewer-sheet">
                                     <ViewerText item={stack.items[0]} index={0} count={count} />
                                 </span>
-                            ) : null}
+                            )}
                         </span>
                     </span>
                 </span>
             </span>
+            {geo.single ? (
+                <div className="folder-viewer-nav" style={{ top: `${phoneNavTop}px` }}>
+                    <button
+                        type="button"
+                        className="folder-viewer-arrow is-back"
+                        aria-label="Previous piece"
+                        disabled={index <= 0}
+                        onClick={goBack}
+                    >
+                        ‹
+                    </button>
+                    <span className="folder-viewer-count">{`${index + 1} / ${count}`}</span>
+                    <button
+                        type="button"
+                        className="folder-viewer-arrow is-next"
+                        aria-label="Next piece"
+                        disabled={index >= count - 1}
+                        onClick={goNext}
+                    >
+                        ›
+                    </button>
+                </div>
+            ) : null}
             {!geo.single && count > 1 ? (
                 <>
                     <button
