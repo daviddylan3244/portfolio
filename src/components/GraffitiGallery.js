@@ -767,11 +767,13 @@ function bakeStamp(text, folderW, fontFamily) {
     return baked;
 }
 
-function BakedStamp({ text, measureWidth, moving, holdUntilBaked = false, onBaked }) {
+function BakedStamp({ text, moving, holdUntilBaked = false, onBaked }) {
+    const nodeRef = useRef(null);
     const [baked, setBaked] = useState(null);
     const [fontFamily, setFontFamily] = useState(stampFontName);
     const movingRef = useRef(moving);
     const onBakedRef = useRef(onBaked);
+    const bakedKeyRef = useRef('');
     movingRef.current = moving;
     onBakedRef.current = onBaked;
 
@@ -784,33 +786,41 @@ function BakedStamp({ text, measureWidth, moving, holdUntilBaked = false, onBake
         return () => stampFontWaiters.delete(apply);
     }, []);
 
-    const bake = useCallback(() => {
-        if (movingRef.current || !fontFamily) return false;
-        const width = measureWidth();
-        if (!(width > 0)) return false;
-        setBaked(bakeStamp(text, width, fontFamily));
-        return true;
-    }, [fontFamily, measureWidth, text]);
-
     useLayoutEffect(() => {
-        if (bake()) onBakedRef.current?.(text);
-    }, [bake, text]);
-
-    useEffect(() => {
-        if (moving) return undefined;
-        const onResize = () => bake();
-        window.addEventListener('resize', onResize);
-        return () => window.removeEventListener('resize', onResize);
-    }, [bake, moving]);
+        const cover = nodeRef.current?.closest('.design-file-cover');
+        if (!cover) return undefined;
+        const attempt = () => {
+            if (movingRef.current || !fontFamily) return false;
+            const width = cover.offsetWidth || 0;
+            if (!(width > 0)) return false;
+            const key = `${fontFamily}|${Math.round(width)}`;
+            if (bakedKeyRef.current === key) return true;
+            bakedKeyRef.current = key;
+            setBaked(bakeStamp(text, width, fontFamily));
+            onBakedRef.current?.(text);
+            return true;
+        };
+        attempt();
+        if (typeof ResizeObserver !== 'function') return undefined;
+        const observer = new ResizeObserver(() => {
+            const width = cover.offsetWidth || 0;
+            const key = `${fontFamily}|${Math.round(width)}`;
+            if (!(width > 0) || bakedKeyRef.current === key) return;
+            attempt();
+        });
+        observer.observe(cover);
+        return () => observer.disconnect();
+    }, [fontFamily, text, moving]);
 
     if (!baked) {
         if (holdUntilBaked) {
-            return <span className="design-file-stamp is-baking" aria-hidden="true" />;
+            return <span ref={nodeRef} className="design-file-stamp is-baking" aria-hidden="true" />;
         }
-        return <span className="design-file-stamp">{text}</span>;
+        return <span ref={nodeRef} className="design-file-stamp">{text}</span>;
     }
     return (
         <img
+            ref={nodeRef}
             className="design-file-stamp is-baked"
             src={baked.src}
             alt=""
@@ -1113,12 +1123,6 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
         if (!hovered && !focused) actions.closeFile();
     }, [showPage]);
 
-    const measureStampWidth = useCallback(() => {
-        if (stateRef.current.open || stateRef.current.closing) return 0;
-        const cover = fileRef.current?.querySelector('.design-file-cover');
-        return cover?.offsetWidth || 0;
-    }, []);
-
     const onPointerDown = (event) => {
         stateRef.current.pointer = event.pointerType || 'mouse';
     };
@@ -1265,7 +1269,6 @@ function CaseFile({ stack, stackIndex, className, inert, showPage, setButton, on
                             </span>
                             <BakedStamp
                                 text={stack.title}
-                                measureWidth={measureStampWidth}
                                 moving={false}
                                 holdUntilBaked
                                 onBaked={onStampBaked}
@@ -1906,11 +1909,6 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
         else goNext();
     };
 
-    const measureViewerStampWidth = useCallback(() => {
-        const cover = fileRef.current?.querySelector('.design-file-cover');
-        return cover?.offsetWidth || geo.w;
-    }, [geo.w]);
-
     const current = stack.items[index];
     const arrowTop = geo.stageTop + geo.h / 2 - VIEWER_ARROW / 2;
     const leftArrow = Math.max(8, geo.vw / 2 - geo.w - VIEWER_ARROW_GAP - VIEWER_ARROW);
@@ -1996,7 +1994,6 @@ function FolderViewer({ stack, stackIndex, startIndex, from, wasOpen, reduced, g
                             </span>
                             <BakedStamp
                                 text={stack.title}
-                                measureWidth={measureViewerStampWidth}
                                 moving={phase === 'closing'}
                                 holdUntilBaked
                             />
@@ -2128,7 +2125,10 @@ const GraffitiGallery = () => {
 
     useEffect(() => {
         if (!gridHold) return undefined;
-        const id = window.setTimeout(lockStampFallback, STAMP_REVEAL_MS);
+        const id = window.setTimeout(() => {
+            lockStampFallback();
+            setGridHold(false);
+        }, STAMP_REVEAL_MS);
         return () => window.clearTimeout(id);
     }, [gridHold]);
 
